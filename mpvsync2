@@ -1,0 +1,4 @@
+#!/bin/bash
+SECS=`echo $(date +%M)*60.0+$(date +%S.%N) | bc -l`
+echo $SECS
+mpv --start=$SECS "$*"

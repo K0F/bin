@@ -1,0 +1,4 @@
+#!/bin/bash
+for i in 24*.wav; do mediainfo $i | grep -e "Encoded date" | awk '{print $5}'| tr -d "\n" && echo " $i" ; done > /tmp/list
+cat /tmp/list | sort > /tmp/sorted
+cat /tmp/sorted

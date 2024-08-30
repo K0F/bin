@@ -1,0 +1,2 @@
+#!/bin/bash
+find . -type f -daystart -mtime -2 | grep "$1"

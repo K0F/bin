@@ -1,0 +1,4 @@
+#!/bin/sh
+
+cd /home/kof/src/supercollider/kof
+screen /usr/local/bin/scvim `date +%s_%Y_%m_%d_W%V_kof%y.scd`

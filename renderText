@@ -1,0 +1,18 @@
+#!/bin/bash
+
+
+if [ -z "$1" ]; then
+ data="@-"
+else
+ data=`cat $1`
+fi
+
+convert \
+-font '/home/kof/.fonts/TeutonWeiss.ttf' -background black -pointsize 58 -fill '#E18A07'  label:"Crypto by Kof" \
+-font '/home/kof/.fonts/TeutonNormal.otf' -background black -pointsize 12 -fill '#404040'  label:"message generated @ `hostname` on `date`" \
+-background black -fill white -font '/home/kof/.fonts/SempliceRegular.ttf' -pointsize 8 -size 300x -encoding utf8 -gravity NorthWest caption:"$data" \
+-append -flatten -set label "Crypto, fuck the robots! message by k0f" -bordercolor black -border 10 /tmp/rederedText.png
+
+#sha=`date`_`sha1sum /tmp/rederedText.png | sed "s#[[:space:]]*/.*/.*.*##g"`
+sha="`date +%d_%m_%y__%T` by `whoami`"
+cp /tmp/rederedText.png /home/kof/crypto/"$sha".png

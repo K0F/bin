@@ -1,0 +1,3 @@
+#!/bin/sh
+cd ~/.wine/drive_c/Program\ Files\ \(x86\)/GameTop.com/Sudden\ Strike\ 2/Run/
+wine game_exe.exe

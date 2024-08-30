@@ -1,0 +1,12 @@
+#!/bin/bash
+NAME=$1
+if [ $# -eq 0 ]
+  then
+NAME=recording
+fi
+
+(sleep 1; jack_connect SuperCollider:out_1 rec:input_1)&
+(sleep 1; jack_connect SuperCollider:out_2 rec:input_2)&
+ffmpeg -f jack -i rec -af "afade=t=in:ss=0:d=5" -strict -1 -y ~/recordings/`date +%s`_$NAME.flac 
+#echo "\\n"
+#(sleep 0.1; kill -s SIGSTOP `pidof ffmpeg`; read -rsn1 -p "Press any key to start recording"; kill -s SIGCONT `pidof ffmpeg` ; read -rsn1 -p "Any key to stop it"; kill -SIGINT `pidof ffmpeg`)

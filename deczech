@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "$*" | tr '[:lower:]' '[:upper:]' | awk -F ',' '{print $1","$2}' | tr ' ' '_' | recode -f utf8..flat | tr ',' ' ' | awk '{print $1" "$2}' | tr '[:lower:]' '[:upper:]' 
+#echo "$*" | tr '[:lower:]' '[:upper:]' | tr '[:upper:]' '[:lower:]' | tr 'ě' 'e' | tr 'š' 's' | tr 'č' 'c' | tr 'ř' 'r' | tr 'ž' 'z' | tr 'ý' 'y' | tr 'á' 'a' | tr 'í' 'i' | tr 'é' 'i' | tr 'ú' 'u' | tr 'ů' 'u' | tr ' ' '_' | tr '[:lower:]' '[:upper:]' 

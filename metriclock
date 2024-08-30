@@ -1,0 +1,6 @@
+#!/bin/bash
+DECIMAL=`date +%H:%M:%S:0.%N | awk -F "[d :]" '{printf "%.05f", (($1*3600)+($2*60)+($3)+($4))/86400.0 }'`
+HH=`echo $DECIMAL | cut -c -3 | sed -e 's/\.//'`
+MM=`echo $DECIMAL | cut -c -5 | tail -c -3`
+SS=`echo $DECIMAL | cut -c -7 | tail -c -3`
+echo $HH:$MM:$SS

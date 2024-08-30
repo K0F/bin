@@ -1,0 +1,2 @@
+#!/bin/bash
+cnee --record --mouse --keyboard -o /tmp/xnee.xns -e /tmp/xnee.log --stop-key Shift_R

@@ -1,0 +1,27 @@
+#!/bin/bash
+playit ()
+{
+  EFF1=$1
+  EFF2=$2
+  LOC1=$3
+  LOC2=$4
+  DIMMENSIONS='video/x-raw,pixel-aspect-ratio=1/1,width=1024,height=576'
+#
+#  if (($SEL>=4))
+#  then
+#    DIMMENSIONS='video/x-raw, pixel-aspect-ratio=1/1,framerate=25/1,width=1024,height=576'
+#  fi
+#
+  gst-launch-1.0 uridecodebin uri="$LOC1" use-buffering=true ! tee name=t\
+    t. ! decodebin ! videorate ! videoscale ! $DIMMENSIONS ! gleffects effect=$EFF1 ! gleffects effect=$EFF2 ! glimagesink\
+    uridecodebin uri="$LOC2" use-buffering=true ! decodebin ! autoaudiosink
+}
+
+##############################################
+
+
+#ADDR=`youtube-dl -g "ytsearch:$3"`;
+ADDR=`youtube-dl -g "ytsearch:$3"`;
+VIZ=`echo $ADDR | tr ' ' '\n' | head -n 1`;
+SND=`echo $ADDR | tr ' ' '\n'  | tail -n 1`;
+playit $1 $2 "$VIZ" "$SND"

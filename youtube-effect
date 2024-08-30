@@ -1,0 +1,27 @@
+#!/bin/bash
+playit ()
+{
+  EFF=$1
+  LOC=$2
+  DIMMENSIONS='video/x-raw, pixel-aspect-ratio=1/1,width=1024,height=576'
+#
+#  if (($SEL>=4))
+#  then
+#    DIMMENSIONS='video/x-raw, pixel-aspect-ratio=1/1,framerate=25/1,width=1024,height=576'
+#  fi
+#
+  gst-launch-1.0 souphttpsrc location="$LOC" ! tee name=t ! decodebin ! videorate ! videoscale ! $DIMMENSIONS ! queue ! tee name=a\
+    a. ! decodebin ! gleffects effect=$EFF ! glimagesink\
+    t. ! decodebin ! autoaudiosink
+}
+
+##############################################
+
+cd ~/irclogs
+./sync.sh
+
+for i in `./getVideos.sh|tail -n1`; do
+  ADDR=`youtube-dl -g "$i"`;
+  echo "playing pipe no: "$COUNTER;
+  playit $1 "$ADDR"
+done

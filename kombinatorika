@@ -1,0 +1,2 @@
+#!/bin/bash
+echo {multi,foto,nara,kombi,uni,nano,narko,neuro,kontra,filo,orto,auto,moto,elektro,atomo,algo,meteo,hyper,inter,fiber,opto,tele,gramo,mega,mikro,fono,proxy,para,pro,re,kyber,metro,techno,psycho}{aparát,text,versum,punkt,sugesce,dukt,pozice,pedie,neuron,net,fon,gram,graf,vize,pank,polis,logie,grafie,laxa,fráze,dox,sex,aktivita,procesor,signum,vitum,ton,tron,sofie,fil,mánie,fílie,fóbie,natorika,link,prostor,film,iluze,pohyb,drom,dron,heking,bending}. | sed -e 's/\./\n/g' | sort -R | espeak -vcs -s 120 -p 20

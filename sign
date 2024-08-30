@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "Coded by Kof @ " && date && echo '\n\n' && cat /home/kof/bin/signature

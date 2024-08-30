@@ -1,0 +1,8 @@
+#!/bin/bash
+echo "Kryštof Pešek" > /home/kof/.signature 
+echo "https://k0f.github.io" >> /home/kof/.signature
+echo "https://k-o-l-e-k-t-i-v.github.io" >> /home/kof/.signature
+echo "----------------------------------------------------" >> /home/kof/.signature
+echo Unix epoch  : `date +%s` >> /home/kof/.signature
+echo Metric time: `/home/kof/bin/metriclock` >> /home/kof/.signature
+echo Moon phase  : `/home/kof/bin/moonphase` >> /home/kof/.signature

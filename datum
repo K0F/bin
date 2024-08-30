@@ -1,0 +1,2 @@
+#!/bin/sh
+date +%s_%Y_%m_%d_W%V_kof%y.scd

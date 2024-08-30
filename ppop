@@ -1,0 +1,10 @@
+#!/bin/bash
+SKETCH=`pwd`
+OUTPUT=/tmp/processingMess/
+
+killall processing-java
+
+cd /home/kof/Downloads/processing-3.4 && primusrun ./processing-java --sketch="$SKETCH" --output=$OUTPUT --force --run
+
+cd $SKETCH
+

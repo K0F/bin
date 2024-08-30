@@ -1,0 +1,13 @@
+#!/bin/bash
+ARGS="$*"
+date +%s.%N
+echo `date +%s.%N` "$ARGS" >> /home/kof/src/now/log
+
+cd /home/kof/src/now
+git commit -am "`date +%s.%N`"
+git pull
+git push
+
+#rsync -avzu home:Downloads ~/.
+#cd ~/Downloads
+#cp `ls -tr | tail -n 1` "$*"; mv "$*" ~/Pictures; cd ~/Pictures && postgen "$*"

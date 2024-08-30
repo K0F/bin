@@ -1,0 +1,4 @@
+#!/bin/bash
+#kill -9 `ps -ef | grep $1 | grep -v grep | awk '{print $2}'`
+for i in `ps ax | grep "$1" | grep -v grep | awk '{print $5}'` ; do echo $i ;done ; for i in `ps ax | grep "$1" | grep -v grep | awk '{print $1}'` ; do kill -9 $i ;done
+#for i in `ps aux | grep "$1" | grep -v grep | awk '{print $2}'`; do kill -9 $i || echo "No such process." ; done

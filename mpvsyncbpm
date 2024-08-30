@@ -1,0 +1,8 @@
+#!/bin/bash
+BPM=`mediainfo "$1" | grep BPM | head -n1 | awk '{print $3}'`
+TARGET="$2"
+SPEED=`echo $TARGET/$BPM | bc -l`
+PITCH=`echo $BPM/$TARGET | bc -l`
+echo altering tempo of track from $BPM to $TARGET that is $SPEED of original tempo
+mpv --start=`date +%S.%N` --no-audio-display --af=rubberband --speed=$SPEED "$1"
+#mpv --af=scaletempo=scale=$SPEED:overlap=0.5 "$1"

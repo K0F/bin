@@ -1,0 +1,10 @@
+#!/bin/bash
+Start=`frac "$2" "$4"` #`echo "$2" | sed 's/.\{2\}/&:/g' | head -c 8`
+End=`frac "$3" "$4"` #`echo "$3" | sed 's/.\{2\}/&:/g' | head -c 8`
+IN="$2" #`echo "$2" | sed 's/.\{2\}/&:/g' | head -c 8`
+OUT="$3" #`echo "$3" | sed 's/.\{2\}/&:/g' | head -c 8`
+
+#Len=`date -u -d "0 $Duration sec - $Start sec" +"%H:%M:%S"`
+Len=`echo "$(date -u -d@"$(( ($(date -u -d"$End" +%s%N) - $(date -u -d"$Start" +%s%N))/1000000000 ))" +%H:%M:%S)"."$(( ($(date -u -d"$End" +%s%N) - $(date -u -d"$Start" +%s%N))%1000000000/1000000 ))"`
+echo getting $Len of "$1"
+ffmpeg -ss "$Start" -i "$1" -t "$Len" -c:v copy -c:a copy "`basename -s .mov $1`"_`echo $IN | tr ':' '-'`_`echo $OUT | tr ':' '-'`_FRAGMENT.mov

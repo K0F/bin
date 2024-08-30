@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -t 10 -f video4linux2 -s 640x480 -r 15 -i /dev/video0 /tmp/img%05d.bmp && convert /tmp/img*.bmp -set delay 6 -loop 0 -delay 6 -dispose 1 -map ~/map.gif -ordered-dither o8x8 /tmp/out.gif && cp /tmp/out.gif ~/ && rm /tmp/img*.bmp
