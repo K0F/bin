@@ -2,9 +2,9 @@
 
 # Nastav proměnné
 input_dir="/run/media/kof/kof17/recordings/field/2024/101NIKON"
-output_file="sběr2_kof_24.mp4"
-interval=14.88  # každých 15 sekund
-duration=0.12  # délka klipu
+output_file="Sběr_kof_24.mp4"
+interval=9.42  # každých 15 sekund
+duration=0.04  # délka klipu
 
 
 rm /tmp/*.mp4
@@ -54,7 +54,9 @@ for video in "$input_dir"/*.MP4; do
     start_formatted=$(echo "$start_formatted" | awk '{print ($1 < 1 && $1 > 0) ? "0"$0 : $0}')
     
     # Výstup z ffmpeg se nyní zapisuje do /dev/null pro odstranění výstupu
-    ffmpeg -y -ss "$start_formatted" -i "$video" -t "$duration" -c copy "$output_clip"
+
+    ffmpeg -y -ss "$start_formatted" -i "$video" -t "$duration" -vf "setpts=N/FRAME_RATE/TB" -af "asetpts=N/SR/TB" -c:v h264 -qp 19 -c:a aac -b:a 256K -bsf:v h264_mp4toannexb -f mpegts "$output_clip"
+    #ffmpeg -y -ss "$start_formatted" -i "$video" -t "$duration" -vf "setpts=N/FRAME_RATE/TB" -af "asetpts=N/SR/TB" -c h264 -qp 19 -c:a aac -b:a 256K  "$output_clip"
 
     # Ověření, že klip byl správně vytvořen
     if [ $? -eq 0 ]; then
@@ -71,7 +73,7 @@ done
 
 # Spoj všechny klipy do jednoho souboru, pokud je seznam klipů neprázdný
 if [ -s "$temp_list" ]; then
-  ffmpeg -loglevel warning -f concat -safe 0 -i "$temp_list" -c copy "$output_file"
+ffmpeg -fflags +genpts -loglevel panic -f concat -safe 0 -i "$temp_list" -c:v copy -c:a copy -absf aac_adtstoasc -flags global_header -y "$output_file"
 else
   echo "Žádné klipy nebyly vytvořeny."
 fi
