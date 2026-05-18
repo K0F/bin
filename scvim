@@ -2,3 +2,5 @@
 
 cd /home/kof/src/supercollider/kof
 screen /usr/local/bin/scvim `date +%s_%Y_%m_%d_W%V_kof%y.scd`
+#screen /home/kof/.vim/bundle/scvim/bin `date +%s_%Y_%m_%d_W%V_kof%y.scd`
+

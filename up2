@@ -1,2 +1,2 @@
 #!/bin/bash
-tor-browser --detach chatrubate.com
+tor-browser --detach "https://chaturbate.com/"
