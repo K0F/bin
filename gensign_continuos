@@ -1,0 +1,2 @@
+#!/bin/bash
+while true; do gensign; sleep 7; gensign; sleep 3; done

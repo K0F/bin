@@ -1,0 +1,14 @@
+#!/bin/bash
+FILENAME=/tmp/data.mp2
+#rm $FILENAME
+#mkfifo $FILENAME
+mkfifo /tmp/ctl
+ffmpeg -i "$*" -c:a mp2 -qscale 0 -y $FILENAME
+#sox "$*" $FILENAME
+(sleep 2 ; echo L $FILENAME > /tmp/ctl)&
+(sleep 2.1 ; echo V 0 > /tmp/ctl)&
+(sleep 2.2 ; echo J $( echo "`date +%S.%N`")s > /tmp/ctl)&
+(sleep 3 ; for i in `seq 0 10 100`; do echo V $i > /tmp/ctl; sleep 0.1; done)&
+$(sleep $(echo "`ffprobe -v error -show_entries format=duration  -of default=noprint_wrappers=1:nokey=1 "$1"` - `date +%S.%N` + 3" | bc -l) ; echo "quit" > /tmp/ctl )&
+sleep 1; mpg123 -a jack --cpu AVX --fifo /tmp/ctl -vRC
+sleep 5

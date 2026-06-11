@@ -1,0 +1,2 @@
+#!/bin/bash
+curl -v  -X GET "https://api.flightstats.com/flex/flightstatus/rest/v2/json/airport/tracks/"$1"/dep?appId=7584d207&appKey=9f429b1d65cba4eccccb4b7158470673&includeFlightPlan=true&maxPositions=999999"

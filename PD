@@ -1,0 +1,2 @@
+#!/bin/sh
+pd -r 44100 -jack -nosleep -rt -font-size 7 -font-weight normal

@@ -1,0 +1,2 @@
+#!/bin/bash
+cd /down/sdrsharp/trunk/Release ; mono SDRSharp.exe

@@ -1,6 +1,8 @@
 #!/bin/sh
 
-cd /home/kof/src/supercollider/kof
-screen /usr/local/bin/scvim `date +%s_%Y_%m_%d_W%V_kof%y.scd`
+NEW_FILE=`date +%s_%Y_%m_%d_W%V_kof%y.scd`
+cd /home/kof/src/sc/kof
+#touch $NEW_FILE
+#screen vim "$@" $NEW_FILE 
 #screen /home/kof/.vim/bundle/scvim/bin `date +%s_%Y_%m_%d_W%V_kof%y.scd`
-
+vim "$@" $NEW_FILE 

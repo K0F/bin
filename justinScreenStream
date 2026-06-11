@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -f x11grab -follow_mouse centered -framerate 30 -video_size cif -i :0.0 -f jack -i stream -c:v libx264 -crf 12 -maxrate 512k -bufsize 512k -pix_fmt yuv420p -s 320x240 -c:a libfaac -b:a 96k  -ar 44100 -f flv -threads 4 "rtmp://live.justin.tv/app/live_58451247_pPZXVzQntVCmXt4a3fZjd9TBcMEk42"

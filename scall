@@ -1,0 +1,2 @@
+#!/bin/bash
+(tr '\n' ' ' < /dev/stdin | tee /tmp/lang && echo -e "\\r\\n" >> /tmp/lang )

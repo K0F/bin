@@ -1,0 +1,4 @@
+#!/bin/bash
+ffmpeg -re -f jack -ac 2 -i RADIO_IN -acodec libvorbis -ac 2 -b:a 128k -ar 44100 -f ogg - | oggfwd -p -n "Kof's TAZ radio" giss.tv 8000 jwz1m /kof.ogg
+#ffmpeg -re -f jack -ac 2 -i RADIO_IN -acodec copy -ac 2 -ar 44100 -f wav - | opusenc --bitrate 96 --ignore-length - - | tee "/home/kof/streams/`date`.opus" | oggfwd -p -n "Kof's TAZ" giss.tv 8000 jwz1m /kof.ogg
+#ffmpeg -re -f jack -ac 2 -i RADIO_IN -acodec libopus -b:a 96k -compression_level 10 -ac 2 -ar 44100 -f ogg - | tee "/home/kof/streams/`date`.ogg" | oggfwd -p -n "Kof's TAZ" giss.tv 8000 jwz1m /kof.ogg

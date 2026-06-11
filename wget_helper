@@ -1,0 +1,2 @@
+#!/bin/bash
+xterm -c "wget $1"

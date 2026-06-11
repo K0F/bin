@@ -1,0 +1,11 @@
+#!/bin/bash
+SKETCH=`pwd`
+OUTPUT=/home/kof/processing/mess/
+
+cd $OUTPUT && rm *
+killall java
+
+cd /home/kof/processing/build/cmd/processing-cmd-0192 && ./processing --preferences=/home/kof/.processing/preferences.txt --sketch=$SKETCH --output=$OUTPUT --present
+
+cd $SKETCH
+

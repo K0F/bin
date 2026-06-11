@@ -1,0 +1,2 @@
+#!/bin/bash
+qemu-system-i386 -m 256 -no-reboot -serial stdio -net user -net nic -redir tcp:2222::22 -hda "$1"

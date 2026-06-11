@@ -1,0 +1,4 @@
+#! /bin/bash
+
+xrandr -d :1 --output DP-0 --off
+pkill screenclone

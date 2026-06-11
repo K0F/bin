@@ -1,0 +1,27 @@
+#!/bin/bash
+# skript RekniTo cte text ze schranky pomoci TTS programu festival
+
+# nastavime nazev pro docasne soubory
+tmpfile="/tmp/reknito.tmp"
+
+# ziskame obsah schranky
+xsel -o > $tmpfile
+
+#while read LINE; do
+#echo ${LINE} > $tmpfile
+#done
+# odstranime uvozovky, pokud je chceme cist, staci prikaz zamenit tim zakomentovanym
+sed -e 's/"//g' $tmpfile > $tmpfile.1
+#sed -e 's/"/ uvozovky /g' $tmpfile > $tmpfile.1
+
+# vytvorime docasny soubor pro festival
+echo "" > $tmpfile.4
+#echo "(voice_cmu_us_awb_arctic_clunits)" > $tmpfile.4
+#echo "(voice_cmu_us_ksp_arctic_clunits)" > $tmpfile.4
+#echo "(voice_cmu_us_clb_arctic_clunits)" > $tmpfile.4
+echo '(SayText "' >> $tmpfile.4
+cat $tmpfile.1 >> $tmpfile.4
+echo '")' >> $tmpfile.4
+
+# prevedeme text zpet do iso-8859-2 a nechame festival text precist
+cstocs utf8 il2 $tmpfile.4 | festival --pipe

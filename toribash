@@ -1,0 +1,2 @@
+#!/bin/bash
+cd ~/toribash-linux-4.7-beta5 && primusrun ./toribash_ubuntu64

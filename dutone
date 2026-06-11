@@ -1,0 +1,7 @@
+#!/bin/bash
+
+for i in `cat list.txt`; do graytoning -r 127 -g 72 -b 49 "$i" "$i"_one.pdf ; graytoning "$i" "$i"_two.pdf ; done
+
+#convert face_pixelated.png -negate circle_array.gif -virtual-pixel tile -fx 'u[floor(11.9999*u)+1]' \
+#for i in `cat list.txt`; do convert "$i"_one.png -ordered-dither o2x2 "$i"_ruzovka.pdf ; done
+

@@ -1,0 +1,3 @@
+#!/bin/bash
+S="$1"
+(cat "$S" | mplayer -loop 0 -fixed-vo -nosound -nocache -demuxer rawvideo -rawvideo fps=15:w=720:h=576:format=y8 -) > /dev/null && pkill aplay && pkill mplayer

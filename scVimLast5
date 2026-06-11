@@ -1,0 +1,3 @@
+#!/bin/bash
+cd ~/src/sc/kof
+screen scvim `ls -ltr | grep scd | awk '{print $9}' | tail -n 20 | sed -n '1{h;T;};G;h;$p;'`

@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -i $* -r 25 -f mpeg -sameq /tmp/webcam.mpg && ffmpeg -i /tmp/webcam.mpg /tmp/img-%05d.png && convert -set delay 3 -loop 0 -delay 3 -dispose 1 /tmp/img-*.png -ordered-dither o2x2 -remap /home/kof/map.gif /tmp/animation.gif && cp /tmp/animation.gif ~/ && rm /tmp/img\-*.png

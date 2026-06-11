@@ -1,0 +1,2 @@
+#!/bin/bash
+cd /usr/local/Nuke7.0v8/ && ./Nuke7.0

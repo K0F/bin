@@ -1,0 +1,6 @@
+#!/bin/bash
+#pkill ffserver
+#ffserver -d &
+pkill node
+(cd /var/www/jsmpeg && node stream-server.js passpasspass) &
+(sleep 1 && ffmpeg -f x11grab -s 1600x900 -r 30 -i :0.0 -vf scale=800:450 -b:v 2M -f mpeg1video http://127.0.0.1:8082/passpasspass/800/450/ && pkill node)

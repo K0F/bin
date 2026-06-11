@@ -1,0 +1,2 @@
+#!/bin/sh
+export MAXWELL2_ROOT=/usr/local/maxwell && cd /usr/local/maxwell/ && ./studio &

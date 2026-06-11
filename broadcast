@@ -1,0 +1,2 @@
+#!/bin/bash
+ffserver & ffmpeg -threads 4 -re -i "$1" -r 25 http://localhost:7777/live.ffm && pkill ffserver

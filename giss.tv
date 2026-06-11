@@ -1,0 +1,2 @@
+#!/bin/bash
+cvlc screen:// --screen-fps=5.00000 --input-slave pulse://jack_in --live-caching=300  --sout "#transcode{vcodec=theo,vb=900,scale=1,fps=5,keyint=1,acodec=vorb,ab=96,channels=2,samplerate=48000}:duplicate{dst=std{access=shout,mux=ogg,dst=source:jwz1m@giss.tv:8000/kof.ogg}}" --no-sout-rtp-sap --no-sout-standard-sap --ttl=1 --sout-keep

@@ -1,0 +1,11 @@
+#!/bin/bash
+pkill Xvfb
+pkill x0vnc4server
+export DISPLAY=:$1
+Xvfb :$1 -extension GLX -extension MPX -extension RANDR -screen 0 1024x768x24 > ~/tmp/vnc.log 2>&1 &
+#/usr/bin/X -ac -audit 0 -sharevts -nolisten tcp -noreset :1 &
+/usr/bin/openbox-session >> ~/tmp/vnc.log 2>&1&
+#Xvnc4 -screen 800x600 -display $1 -AlwaysShared 1 
+sleep 10s && x0vnc4server -display :$1 -PasswordFile ~/.vnc/passwd
+#x11vnc -shared -many -display :$1 && >> ~/tmp/vnc.log 2>&1&
+#screenclone -d:1 -x0&

@@ -1,0 +1,4 @@
+#!/bin/bash
+#rm /tmp/signal > /dev/null 2>&1
+mkfifo /tmp/signal > /dev/null 2>&1
+tail -n 1 /tmp/signal > /dev/null 2>&1 && exit 0 || exit 1

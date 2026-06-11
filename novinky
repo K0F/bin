@@ -1,0 +1,2 @@
+#!/bin/bash
+GET novinky.cz | sed 's/>/>\n/g' | sed 's/</\n</g' | sed -n '/.*\.\.\./p' | sed 's/^[ ]//g' | espeak -v cs -s 60

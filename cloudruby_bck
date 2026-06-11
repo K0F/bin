@@ -1,0 +1,134 @@
+#!/usr/bin/env ruby
+
+require 'pp'
+require 'observer'
+require 'logger'
+require 'json/pure'
+require_relative 'soundcloud.rb'
+require_relative 'mpg123player.rb'
+require_relative 'ncurses_ui.rb'
+
+class Cloudruby
+  def init(q, config)
+    @config = config
+    @cloud = SoundCloud.new "76796f79392f9398288cdac3fe3391c0"
+    @player = MPG123Player.new
+    @ui = NCursesUI.new self, (@config[:ncurses] || @config[:curses])
+
+    # @logger = Logger.new "logfile.log"
+    @logger = Logger.new STDERR
+    # @logger.level = Logger::DEBUG
+    @logger.level = Logger::Severity::UNKNOWN
+
+    @player.logger = @logger
+    @ui.logger = @logger
+    @logger.info {"logger inited"}
+    
+    @player.add_observer @ui, :player_update
+    @player.add_observer self
+    @cloud.add_observer @ui, :cloud_update
+    @logger.info {"observer assigned"}
+
+    @cloud.load_playlist q
+    @logger.info {"loaded playlist"}
+    @cloud.shufflePlaylist unless @config[:"no-shuffle"]
+    @logger.info {"playlist shuffled"}
+    nextTrack
+
+    trap("INT") do
+      self.quit
+    end
+  end
+
+  def nextTrack
+    track = @cloud.nextTrack
+    unless track
+      puts "Nothing found"
+      quit
+    else
+      @player.play track
+    end
+  end
+
+  def prevTrack
+    track = @cloud.prevTrack
+    unless track
+      puts "Nothing found"
+      quit
+    else
+      @player.play track
+    end
+  end
+
+  def pause
+    @player.pause
+  end
+
+  def volumeUp
+    @player.volume = 5
+  end
+
+  def volumeDown
+    @player.volume = -5
+  end
+  
+  def toggleMute
+    @player.mute
+  end
+
+  def run
+    @ui.run
+  end
+
+  # jump to next track, if current track finishes
+  def update(arg)
+    state = arg[:state]
+    case state
+    when :stop
+      nextTrack
+    end
+  end
+
+  def download
+    @cloud.download @config[:download_dir]
+  end
+
+  # quit app and free all resources
+  def quit
+    @ui.close
+    @player.close
+    @logger.close
+    exit
+  end
+end
+if $0 == __FILE__
+  @config = {}
+  @query = []
+  cfile = File.join Dir.home, ".#{File.basename($0)}.json"
+
+  ARGV.each do |a|
+    if a[0, 2] == "--"
+      a = a[2..-1]
+      key, value = a.split("=", 2)
+      @config[key.to_sym] = value || true
+    else
+      @query << a
+    end
+  end
+
+  if @config[:noconfig].nil? && File.readable?(cfile)
+    File.open cfile, 'r' do |file|
+      jsonconf = JSON.load file, nil, :symbolize_names => true
+      @config = jsonconf.merge(@config)
+    end
+  end
+  
+  @config[:download_dir] ||= Dir.pwd
+
+  @query = @query.join " "
+
+  c = Cloudruby.new
+  c.init @query, @config
+  c.run
+end
+

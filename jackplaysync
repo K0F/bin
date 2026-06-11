@@ -1,0 +1,10 @@
+#!/bin/sh
+(echo play | jack_transport)
+(echo master 1 | jack_transport)
+(echo tempo 51.84 | jack_transport)
+(echo locate $( echo "(`date +%S.%N` ) * 48000 - 2048" | bc -l ) | jack_transport)&
+SEC=$(ffprobe "$1" 2>&1 | grep Duration | awk '{print $2}' | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
+SEC=$(scale=3; echo "$SEC+($SEC/150.0)" | bc -l)
+(sleep $SEC; pkill file2jack)&
+echo "sleep for $SEC"s
+file2jack --at 0 -i "$1"

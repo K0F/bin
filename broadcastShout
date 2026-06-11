@@ -1,0 +1,4 @@
+#!/bin/bash
+PORT=10000
+PORT=$1
+/usr/bin/socat - UDP4-DATAGRAM:224.0.0.1:$PORT,so-broadcast < /dev/stdin

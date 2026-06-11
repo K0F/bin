@@ -1,0 +1,3 @@
+#!/bin/sh
+cd /opt/zachtronicsindustries/spacechem
+optirun ./spacechem-launcher.sh

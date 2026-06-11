@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -r 25 -video_size 800x480 -framerate 25 -f x11grab -i :0.0 -f jack -i stream -ac 2 -ar 48000 -pix_fmt yuv420p -async 1 -vsync 2 -r 25 -f ffm http://localhost:8090/feed1.ffm

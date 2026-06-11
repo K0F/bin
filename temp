@@ -1,0 +1,2 @@
+#!/bin/sh
+sensors | grep temp1 | awk '{ print  }'

@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /home/kof/src/roj/kof_set/Renaissance
+./run.sh

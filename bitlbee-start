@@ -1,0 +1,4 @@
+#!/bin/sh -x
+bitlbee -n -v -P $HOME/opt/bitlbee/var/run/bitlbee.pid \
+-c $HOME/etc/bitlbee/bitlbee.conf \
+-d $HOME/opt/bitlbee/var/bitlbee

@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -f v4l2 -i /dev/video0 -f jack -i stream -vf "scale=384:216" -vcodec libx264 -x264opts keyint=50:min-keyint=25 -crf 20 -maxrate 1000k -bufsize 512k -acodec libmp3lame  -pix_fmt yuv420p -b:a 128k -ar 44100 -r 25 -threads 4 -f flv "rtmp://live.justin.tv/app/live_58451247_pPZXVzQntVCmXt4a3fZjd9TBcMEk42"

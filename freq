@@ -1,0 +1,2 @@
+#!/bin/bash
+GET $1 | tr A-Z a-z | tr -cs a-z "[\012*]" | grep "[a-z]" | sort | uniq -c | sort -rn 

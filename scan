@@ -1,0 +1,2 @@
+#!/bin/bash
+scanimage --device 'hpaio:/usb/Deskjet_2050_J510_series?serial=CN0912P5ZW05D1' --mode=color --format=tiff --resolution 300 > "$1" 

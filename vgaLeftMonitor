@@ -1,0 +1,1 @@
+xrandr --output LVDS1 --primary --mode 1600x900 --output VGA1 --left-of LVDS1 --noprimary --mode 1024x768

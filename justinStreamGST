@@ -1,0 +1,4 @@
+#!/bin/bash
+gst-launch -e \
+jackaudiosrc connect=none ! audioconvert ! audiorate ! 'audio/x-raw-int,rate=48000,channels=2' ! ffenc_aac ! flashmux. \
+ximagesrc use-damage=false show-pointer=true display-name=:1.0 screen-num=1 ! ffmpegcolorspace ! videoscale ! videorate ! queue ! video/x-raw-yuv, width=512, height=320, framerate=25/1 ! ffenc_flv ! flvmux name="flashmux" ! rtmpsink location="rtmp://live.justin.tv/app/live_58451247_pPZXVzQntVCmXt4a3fZjd9TBcMEk42" sync=false

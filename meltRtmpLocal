@@ -1,0 +1,2 @@
+#!/bin/bash
+ melt "$@" -realtime 1 -profile square_ntsc_wide -filter crop center=1 -consumer avformat:rtmp://localhost/live/test properties=x264-medium-main f=flv r=25 g=50 bf=0 refs=1 vb=5000k frequency=44100 real_time=1 vb=1000k ab=128k

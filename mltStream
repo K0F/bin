@@ -1,0 +1,1 @@
+melt "$1" -consumer avformat terminate_on_pause=0 f=ogg vcodec=libtheora b=750k acodec=libvorbis aq=25 | oggfwd giss.tv 8000 jwz1m /kof.ogg

@@ -1,0 +1,2 @@
+#!/bin/bash
+cd /sketchBook/pd/tyara_klient/ && pd-extended -path /usr/lib/pd-extended/extra/iemnet:/usr/lib/pd-extended/extra/net:/usr/lib/pd-extended/extra/mrpeach /sketchBook/pd/tyara_klient/Ty_a_Ra_klient.pd 

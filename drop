@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#see /usr/local/bin/block_subnet.sh
 set -euo pipefail
 
 IP="${1:-}"

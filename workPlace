@@ -1,0 +1,8 @@
+#!/bin/bash
+mesice=( leden unor brezen duben kveten cerven cervenec srpen zari rijen listopad prosinec )
+which=`date +%m`
+cd /sketchBook/`date +%Y`/$which-${mesice[`expr $which - 1`]}
+
+
+
+#mkdir -p /sketchBook/`date +%Y`/`date +%m`-${mesice[`date +%m`]} && cd /sketchBook/`date +%Y`/`date +%m`-${mesice[`date +%m`]}

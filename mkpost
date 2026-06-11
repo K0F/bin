@@ -1,0 +1,14 @@
+#!/bin/bash
+fn=`echo -n "$*" | tr ' ' '-'`;
+filename=`date +%Y-%m-%d-"$fn"`.markdown;
+touch $filename
+echo "---" > $filename 
+echo "layout: post" >> $filename 
+echo "title: $*" >> $filename 
+echo "date: `date '+%Y-%m-%d %H:%M:%S'`" >> $filename 
+echo "categories: kof thoughts" >> $filename
+echo "---" >> $filename 
+echo "" >> $filename 
+echo "" >> $filename 
+echo "" >> $filename 
+vim $filename

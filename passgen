@@ -1,0 +1,2 @@
+#!/bin/bash
+date +%s | sha512sum | base64 | head -c 32 ; echo

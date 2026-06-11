@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /home/kof/kden/20150604
+./start-kdenlive

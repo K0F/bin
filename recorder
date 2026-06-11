@@ -1,0 +1,3 @@
+#!/bin/sh
+cd ~/Videos
+/home/kof/src/X11_frameDiff_recorder/gl_overlay &

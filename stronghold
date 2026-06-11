@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /home/kof/.wine/drive_c/Program\ Files/Firefly\ Studios/Stronghold\ Crusader\ Extreme\ HD/
+wine Stronghold\ Crusader.exe

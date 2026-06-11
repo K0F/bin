@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -f rawvideo -vcodec rawvideo -pix_fmt y8 -s 32x18 -r 60 -i "$1" -f s8 -sample_rate 34560 -ac 1 -i "$1" -r 60 -s 400x225 -sws_flags accurate_rnd -sws_dither bayer -b:v 8M -b:a 256K -ac 1 -ar 44100  /tmp/out.mpg

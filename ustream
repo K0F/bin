@@ -1,0 +1,2 @@
+#!/bin/bash
+ffmpeg -re -f x11grab -i :0.0 -s 1024x768 -vf scale=480:320 -vcodec libx264 -preset veryfast -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 50 -acodec libmp3lame -b:a 128k -ac 2 -threads 4 -ar 48000 -f flv rtmp://1.20128976.fme.ustream.tv/ustreamVideo/20128976/ugSMy6nb8XcqdPFUSkEGjftPAExx9MqT

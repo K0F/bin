@@ -1,0 +1,4 @@
+#!/bin/bash
+ffmpeg -f x11grab -s 1600x900 -i :0.0 -f jack -i stream -vcodec libx264 -pix_fmt yuv420p -preset ultrafast -r 30 -g 60 -b:v 2500k -acodec libmp3lame -ar 44100 -ac 2 -ab 128k -threads 4 -bufsize 512k -f flv rtmp://a.rtmp.youtube.com/live2/$1
+
+#ffmpeg -re -i "$1" -vcodec libx264 -g 50 -keyint_min 25 -crf 20 -maxrate 1500K -bufsize 2000K -acodec libmp3lame -ac 2 -pix_fmt yuv420p -b:a 96k -ar 44100 -threads 4 -vf "scale=1280:720" -f flv "rtmp://a.rtmp.youtube.com/live2/$2"

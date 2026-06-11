@@ -1,0 +1,2 @@
+#!/bin/bash
+cnee -ns -ka --replay --mouse --keyboard -f /tmp/xnee.xns --stop-key Shift_R

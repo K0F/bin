@@ -1,0 +1,2 @@
+#!/bin/bash
+cnee --replay -sp 200 --retype-file "$1" --stop-key Shift_R

@@ -1,0 +1,24 @@
+#!/bin/bash
+SKETCH=$(pwd)
+OUTPUT=/tmp/processingMess/
+
+killall processing-java
+
+echo $SKETCH
+
+FILE=$SKETCH/application
+
+echo $FILE
+
+if [ -f $FILE ];
+then
+  rm $SKETCH/application -r
+fi
+
+mkdir $SKETCH/application
+
+cd "/home/kof/processing-2.0b8" && ./processing-java --sketch="$SKETCH" --output="$SKETCH/application" --force --platform='linux' --bits=64 --export
+
+cd $SKETCH
+
+

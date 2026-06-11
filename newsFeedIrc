@@ -1,0 +1,2 @@
+#!/bin/bash
+tailf ~/irclogs/2014/IRCnet/\#news.cz.`date +"%m-%d"`.log -n1 | awk -F ':: ' '{print $2; fflush(stdout)}'  | xargs -l google-chrome

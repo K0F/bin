@@ -1,0 +1,2 @@
+#!/bin/bash
+jarsigner -verbose -sigalg MD5withRSA -digestalg SHA1 -keystore /home/kof/kof.keystore $1 kof && jarsigner -verify -verbose $1 && zipalign -v 4 $1 $(basename $1 -release-unsigned.apk).apk

@@ -1,0 +1,8 @@
+	# gawk profile, created Sat Apr 18 13:08:29 2015
+
+	# Rule(s)
+
+     6  {
+     6  	$0
+	}
+

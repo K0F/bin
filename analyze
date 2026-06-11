@@ -1,0 +1,5 @@
+#!/bin/bash
+list=`ls -tr`
+cat $list > /tmp/file.raw && foremost -i /tmp/file.raw -o /tmp/output && cat /tmp/output/audit.txt && montage -tile 10x -background black /tmp/output/jpg/*.jpg /tmp/output/png/* /tmp/out.png && sudo rm /tmp/output -r && viewnior /tmp/out.png &
+
+

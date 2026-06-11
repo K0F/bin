@@ -1,0 +1,1 @@
+debtree -b --show-all --no-recommends --no-versions --no-alternatives sun-java6-jdk | dot -overlap=false -Gsplines=line -T png -o tree.png

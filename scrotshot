@@ -1,0 +1,2 @@
+#!/bin/sh
+scrot - | tee ~/Pictures/screenshot-$(date +%s_%Y-%m-%d_%H-%M-%S).png | xclip -selection clipboard -t image/png

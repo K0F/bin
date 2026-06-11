@@ -1,0 +1,2 @@
+#!/bin/sh
+echo -e {bóóó,tááá,záá,fumus,bééé,'bumtsataka','remss'}{?,}{taka,"takataka","rrrms"}{?,}{"béb","bé bé"}{?,}\\n | unsort | espeak -v mb-cz2 --stdin | mbrola -e -l 22050 -v 2 -f 0.653 -t 1 -e ~/cz2 - -| aplay -r22050 -fS16

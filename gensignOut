@@ -1,0 +1,5 @@
+#!/bin/bash
+echo Time  :       `date +%H:%M:%S` 
+echo Unix epoch  : `date +%s` 
+echo Metric time: `/home/kof/bin/metriclock` 
+echo Moon phase  : `/home/kof/bin/moonphase`

@@ -1,0 +1,6 @@
+#!/bin/sh
+echo "$1" > /tmp/tc
+echo "  $2" >> /tmp/tc
+cnee --replay --mouse --keyboard -f ~/one.xns
+cnee --retype-file /tmp/tc
+cnee --replay --mouse --keyboard -f ~/two.xns

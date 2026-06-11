@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Settings
+BG='#000000'  # background
+FG='#FFFFFF'  # foreground
+FN='-*-nu-*-*-*-*-*-*-*-*-*-*-*-*' # font
+
+while true; do
+sleep .5
+ 
+ # Remind
+ REMIND=`remind '-kecho %s'`
+
+ # Clock
+ CLOCK=`date +"%H:%M "`
+
+ echo "^fg(#A9A28F)$REMIND   ^fg(#FFFFFF)$CLOCK"
+
+
+ done | dzen2 -ta r -fg $FG -bg $BG -fn $FN -h 17 -w 120 -x 910 -y 0 -e 'button1=exec:orage;'-

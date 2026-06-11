@@ -1,0 +1,9 @@
+#!/bin/bash
+S="$1"
+PID="$(pidof mplayer)"
+if ps $PID
+then
+(echo "main(t){for(t=0;;t++)putchar($S);}" | gcc -x c - -lm -o /tmp/bytebeat && /tmp/bytebeat | tee "/tmp/bb.raw" | mplayer -zoom -x 800 -y 450 -geometry 75%:25% -nosound -nocache -demuxer rawvideo -rawvideo fps=60:w=32:h=18:format=y8 "/tmp/bb.raw" > /dev/null )
+else
+(echo "main(t){for(t=0;;t++)putchar($S);}" | gcc -x c - -lm -o /tmp/bytebeat && /tmp/bytebeat | tee "/tmp/bb.raw" >> "/tmp/bb.raw")
+fi

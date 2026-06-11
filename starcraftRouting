@@ -1,0 +1,2 @@
+sudo iptables -A INPUT -i ham0 -p udp --dport 6112 -m state --state NEW,ESTABLISHED -j ACCEPT
+sudo route add -host 255.255.255.255 dev ham0

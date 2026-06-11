@@ -1,0 +1,11 @@
+#!/bin/bash
+pkill gst-launch-1.0
+pkill output2icecast
+
+(sleep 10s && mpv http://localhost:8000/test.webm)&
+(cd $SM/ini && snowmix minimal-1feed) &
+#(sleep 5s && cd $SM/scripts && ./output2screen) &
+sleep 3s
+cd $SM/scripts
+./output2icecast
+

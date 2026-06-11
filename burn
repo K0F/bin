@@ -1,0 +1,5 @@
+#!/bin/bash
+xorriso -as cdrecord -v speed=4 dev=/dev/sr0 -driveropts=burnfree -dao "$*"
+beep
+eject
+

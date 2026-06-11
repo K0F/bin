@@ -1,0 +1,18 @@
+#!/bin/bash
+if [ "$#" -ne 2 ]; then
+  echo "Usage: frac HH:MM:SS:FF FPS" >&2
+  exit 1
+fi
+
+FRAG=`echo "scale=2; 1/$2" | bc -l`
+FRAMENO=`echo "$1" | awk -F':' '{print $4}'`
+
+if [ $FRAMENO == "00" ]
+then
+  FRAC=".00"
+else
+  FRAC=$(echo "$FRAMENO * $FRAG" | bc -l)
+fi
+
+COMPLETE=`echo $1 | awk -F':' '{print $1, $2, $3}' | while read H M S; do echo "$H:$M:$S$FRAC" ;done`
+echo $COMPLETE

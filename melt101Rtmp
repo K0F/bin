@@ -1,0 +1,2 @@
+#!/bin/bash
+ melt "$@" -realtime 1 -profile square_ntsc_wide -filter crop center=1 -consumer avformat:rtmp://stream.ssh101.com/live/kofsnetwork properties=x264-medium-main f=flv r=24 g=48 bf=0 refs=1 frequency=44100 real_time=1 vb=1000k ab=128k

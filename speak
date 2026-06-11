@@ -1,0 +1,3 @@
+#!/bin/bash
+uconv -f utf-8 -t iso-8859-2 --output /tmp/speak.txt
+cat /tmp/speak.txt | festival --pipe --tts

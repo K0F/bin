@@ -1,0 +1,4 @@
+#!/bin/bash
+rtl_fm -M wbfm -f "$1"m -s 170k -A fast -g 9 -r 32k -l 0 -E deemp | play -t raw -r 32k -e s -b 16 -c 1 -V1 - 
+
+#lowpass 16k

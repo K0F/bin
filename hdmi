@@ -1,0 +1,24 @@
+#! /bin/bash
+optirun true
+sudo rm /tmp/.X1-lock
+sudo /usr/bin/X -ac -audit 0 -config /etc/X11/xorg.conf.nvidia -sharevts -modulepath /usr/lib/nvidia/current,/usr/lib/xorg/modules     -nolisten tcp -noreset :1 &
+
+
+
+(sleep 7s &&
+echo "modes available: "
+xrandr -d :1
+
+pkill screenclone && echo "screenclone detected, killing..." || echo "OK, no screenclone is running.."
+
+RES="$1"
+
+if [ -z "$1" ]
+    then
+     RES="1024x768"
+     echo "Auto resolution: "$RES
+fi
+
+xrandr -d :1 --output DP-0 --mode "$RES"
+screenclone -d:1 -x 0 &
+)

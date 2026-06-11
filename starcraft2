@@ -1,0 +1,4 @@
+#!/bin/sh
+cd .wine/drive_c/Program\ Files/StarCraft\ II/
+optirun bash -c "./run.sh" &
+

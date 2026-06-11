@@ -1,0 +1,8 @@
+#!/bin/bash
+xrandr --newmode  "1600x900_60.00"  118.25  1600 1696 1856 2112  900 903 908 934 -hsync +vsync
+xrandr --addmode LVDS-1  "1600x900_60.00"
+xrandr --addmode VGA-1  "1600x900_60.00"
+xrandr --newmode  "1280x720_60.00"   74.50  1280 1344 1472 1664  720 723 728 748 -hsync +vsync
+xrandr --addmode LVDS-1  "1280x720_60.00"
+xrandr --addmode VGA-1  "1280x720_60.00"
+

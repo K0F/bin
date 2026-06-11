@@ -1,0 +1,6 @@
+#!/bin/sh
+#(echo play | jack_transport)
+#(echo master 1 | jack_transport)
+SEC=$(echo "$1" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
+(echo locate $( echo "($SEC) * 48000 - 2048" | bc -l ) | jack_transport)
+#echo "seeking jack transport to frame  $( echo "($SEC) * 48000 - 2048" | bc -l ) - (2048)"

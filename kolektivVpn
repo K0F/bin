@@ -1,0 +1,3 @@
+#!/bin/sh
+cd ~/openvpn
+sudo openvpn kof.ovpn

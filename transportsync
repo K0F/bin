@@ -1,0 +1,3 @@
+#!/bin/bash
+echo play | jack_transport
+echo locate $( echo "(`date +%S.%N` ) * 48000 - 2048" | bc -l ) | jack_transport

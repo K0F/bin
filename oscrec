@@ -1,0 +1,3 @@
+#!/bin/bash
+cd src/oscrec
+./oscrec | tee ~/`date +%s`_oscrec.txt

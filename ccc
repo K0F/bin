@@ -1,0 +1,5 @@
+#!/bin/bash
+echo `basename $(pwd)` > .gitignore
+#(cat `ls | grep '.pde\|.c\|.cpp\|.h'` |  sed '1s/^/#include <cprocessing.hpp>\nusing namespace cprocessing;\n/' | g++ -x c++ - -lcprocessing -lGLU -lGL -lglut -O3 -Wall -o `basename $(pwd)` ) && (echo "Compilation OK! ..running" && ./`basename $(pwd)`) || echo "Compilation failed"
+(cat `ls | grep '.pde\|.c\|.cpp\|.h'` |  g++ -x c++ - -lcprocessing -lGLU -lGL -lglut -O3 -Wall -o `basename $(pwd)` ) && (echo "Compilation OK! ..running" && ./`basename $(pwd)`) || echo "Compilation failed"
+

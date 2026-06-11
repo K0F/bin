@@ -1,0 +1,2 @@
+#!/bin/bash
+screen scvim $* ~/annex/utils/vocabulary.scd

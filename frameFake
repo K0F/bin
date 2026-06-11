@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "frame.removeNotify()"
+echo "frame.setFocusableWindowState(false)"
+echo "frame.addNotify()"

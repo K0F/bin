@@ -1,1 +1,4 @@
-/home/kof/processing/processing
+#!/bin/sh
+#cd /home/kof/src/processing/build/linux/work
+cd /home/kof/processing-3.5.4
+./processing

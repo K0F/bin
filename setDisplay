@@ -1,0 +1,5 @@
+#!/bin/sh
+export DISPLAY=localhost:10.0
+#$IP= `wget http://Www.whatismyip.com -O - -o /dev/null | grep '<TITLE>' | sed -r 's/<TITLE>WhatIsMyIP\.com \- //g' | sed -r 's/<\/TITLE>//g'`
+#echo $IP
+xhost +

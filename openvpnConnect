@@ -1,0 +1,6 @@
+!/bin/bash
+cd ~/openvpn/services
+./update_vpnprovidersinfo_and_extract_certs.sh
+sudo echo "ROOT privs elevated ^^"
+(sleep 15s && sudo resolvconf -u)&
+sudo openvpn ./vpnbook-euro1-tcp443.ovpn

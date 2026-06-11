@@ -1,0 +1,6 @@
+#!/bin/sh
+sudo cpupower frequency-set -g performance
+
+sudo bash -c "echo 2048 > /proc/sys/dev/hpet/max-user-freq"
+sudo bash -c "echo 2048 > /sys/class/rtc/rtc0/max_user_freq"
+echo "max_performance" | sudo tee /sys/class/scsi_host/host1/link_power_management_policy

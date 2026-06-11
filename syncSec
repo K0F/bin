@@ -1,0 +1,1 @@
+echo locate $( echo "(`date +%S.%N` ) * 48000" | bc -l ) | jack_transport

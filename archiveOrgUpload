@@ -1,0 +1,13 @@
+#!/bin/sh
+file=$1
+title=$2
+accesskey=VcAWy4v33VyW3pCl
+secret=gBhOUcNWzOewlXLI
+
+curl --progress-bar --location --header 'x-amz-auto-make-bucket:1' \
+  --header 'x-archive-meta01-collection:opensource_audio' \
+  --header 'x-archive-meta-mediatype:audio' \
+  --header "x-archive-meta-title:$title" \
+  --header "authorization: LOW $accesskey:$secret" \
+  --upload-file "$file" \
+  "http://s3.us.archive.org/kof-`date -u +%s`/$file"

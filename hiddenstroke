@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /down/hs2rw_full_v1/Run
+wine run/game_exe.exe

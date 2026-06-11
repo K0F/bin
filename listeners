@@ -1,0 +1,2 @@
+#!/bin/bash
+watch -n 60 'links -dump  http://giss.tv:8000/ | egrep -B0 -A11 "Mount Point /kof.ogg"'
