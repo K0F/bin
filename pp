@@ -2,7 +2,7 @@
 SKETCH=`pwd`
 OUTPUT=/tmp/processingMess/
 
-killall processing-java || echo No instances running, good.
-cd "/home/kof/processing-git/build/linux/work" && ./processing-java --sketch="$SKETCH" --output=$OUTPUT --force --run
+killall processing || echo No instances running, good.
+cd "/var/lib/snapd/snap/bin/" && ./processing cli --sketch="$SKETCH" --output=$OUTPUT --force --run
 cd $SKETCH
 

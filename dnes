@@ -1,0 +1,18 @@
+#!/bin/bash
+cd repos/dnes.git
+git init
+
+cat << 'EOF' > ./02_observator/mpd_drift_gate.patch
+diff --git a/main.go b/main.go
+index a2f3b4c..c5d6e7f 100644
+--- a/main.go
++++ b/main.go
+@@ -12,3 +12,3 @@ const (
+-	DriftGate = 500 * time.Millisecond
++	DriftGate = 300 * time.Millisecond
+ 	MpdPort   = "6600"
+ )
+EOF
+
+git add .
+git commit -m "init: kompletní struktura /dnes, vyčištěná administrativa a mpd patch"

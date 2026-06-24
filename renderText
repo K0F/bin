@@ -22,7 +22,7 @@ tmp_img="/tmp/renderedText.png"
 
 # 2. Samotný rendering (Sjednoceno na šířku 500px)
 convert \
-  -size 500x \
+  -size 512x \
   -background black \
   -fill '#E18A07' -font '/home/kof/.fonts/TeutonWeiss.ttf' -pointsize 58 -gravity center caption:"Crypto by Kof" \
   -fill '#404040' -font '/home/kof/.fonts/TeutonNormal.otf' -pointsize 12 -gravity center caption:"message generated @ $(hostname) on $(date)" \

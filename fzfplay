@@ -1,0 +1,12 @@
+#!/bin/zsh
+
+# mpc clear
+
+# This searches the database for all files where the file path starts with "Music/"
+# It is faster and handles the recursion automatically
+song=$(mpc ls | fzf --multi --prompt="Music > ")
+
+if [ -n "$song" ]; then
+    echo "$song" | mpc add
+    mpc play
+fi

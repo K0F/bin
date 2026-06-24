@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+# Define your audio devices
+SYNTH_SRC="your_system_output.monitor"
+MIC_SRC="your_microphone_input"
+
+SESSION_NAME="live_session_$(date +%Y%m%d_%H%M%S)"
+
+echo "--> Initializing synced audio + terminal recording..."
+
+# 1. Start FFmpeg in the background silently
+ffmpeg -y -f pulse -i "$SYNTH_SRC" -f pulse -i "$MIC_SRC" \
+       -filter_complex "[0:a]volume=1.0[synth]; [1:a]volume=0.4[mic]; [synth][mic]amix=inputs=2:duration=longest[out]" \
+       -map "[out]" -acodec libmp3lame -b:a 192k "${SESSION_NAME}.mp3" > /dev/null 2>&1 &
+FFMPEG_PID=$!
+
+# 2. Immediately launch asciinema in the foreground
+# This keeps you in the active terminal environment
+asciinema rec "${SESSION_NAME}.cast"
+
+# 3. Once you exit the asciinema session, the script resumes here:
+echo "--> Terminal session ended. Wrapping up audio..."
+
+# Send a polite SIGTERM to FFmpeg so it flushes the MP3 buffer safely
+kill -15 $FFMPEG_PID
+wait $FFMPEG_PID
+
+echo "--> Done! Saved files:"
+echo "    ${SESSION_NAME}.cast (Terminal)"
+echo "    ${SESSION_NAME}.mp3  (Audio Mix)"

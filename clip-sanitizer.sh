@@ -1,1 +1,1 @@
-clip-sanitizer.sh
+/home/kof/.local/bin/clip-sanitizer.sh
