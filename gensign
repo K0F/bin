@@ -1,8 +1,22 @@
 #!/bin/bash
-echo "Kryštof Pešek" > /home/kof/.signature 
+#echo "Kryštof Pešek" > /home/kof/.signature 
 #echo "https://k0f.github.io" >> /home/kof/.signature
-echo "https://k0f.github.io" >> /home/kof/.signature
-echo "-----------------------------------------" >> /home/kof/.signature
-echo Moon phase  : `/home/kof/bin/moonphase` >> /home/kof/.signature
-echo Metric time: `/home/kof/bin/metriclock` >> /home/kof/.signature
-echo Unix epoch  : `date +%s` >> /home/kof/.signature
+#echo "https://k0f.github.io" >> /home/kof/.signature
+#echo "-----------------------------------------" >> /home/kof/.signature
+#echo Moon phase  : `/home/kof/bin/moonphase` >> /home/kof/.signature
+#echo Metric time: `/home/kof/bin/metriclock` >> /home/kof/.signature
+#echo Unix epoch  : `date +%s` >> /home/kof/.signature
+
+while true; do
+  {
+    echo "Kryštof Pešek"
+    echo "https://k0f.github.io"
+    echo "-----------------------------------------"
+    echo "Moon phase  : $(/home/kof/bin/moonphase)"
+    #echo "Metric time : $(/home/kof/bin/metriclock)"
+    echo "Unix epoch  : $(date +%s)"
+    echo `/home/kof/src/metricTime/dh | tail -n 2 | head -n 1`
+  } > /home/kof/.signature
+
+  sleep 1.2
+done
