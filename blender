@@ -1,3 +1,0 @@
-#!/bin/bash
-cd /opt/blender #blender-2.65a-linux-glibc211-x86_64
-primusrun ./blender

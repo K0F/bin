@@ -1,0 +1,1 @@
+mpv http://stream.live.vc.bbcmedia.co.uk/bbc_world_service

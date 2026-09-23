@@ -1,14 +1,13 @@
 # SAMPLE: FLAC streaming on Windows & Mac
 while true
 do
-  ffmpeg -f jack -i stream \
+  ffmpeg -re -f jack -i stream \
          -ar 48000 \
          -ac 2 \
-         -c:a opus \
-		 -fflags +igndts \
-         -f ogg \
-         -strict -2 \
-         -content_type 'application/ogg' \
-         icecast://source:cigareta@pesek.ddns.net:8000/stream.ogg
+         -c:a libmp3lame \
+         -b:a 192k \
+         -f mp3 \
+         -content_type 'audio/mpeg' \
+         icecast://source:cigareta@xn--peek-h6a.com:9000/radio.mp3
   sleep 1
 done

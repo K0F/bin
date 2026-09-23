@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Nastavení rychlosti (uprav si podle potřeby)
+SPEED="19000kbit"
+
+CMD=$1
+IFACE=$2
+
+if [ -z "$CMD" ]; then
+    CMD="status"
+fi
+
+if [ -z "$IFACE" ]; then
+    echo "Použití: sudo sqm [start|stop|status] [rozhraní]"
+    exit 1
+fi
+
+case "$CMD" in
+    start)
+        echo "Aktivuji Cake na $IFACE..."
+        tc qdisc replace dev "$IFACE" root cake bandwidth "$SPEED" besteffort
+        ;;
+    stop)
+        echo "Vypínám Cake na $IFACE..."
+        tc qdisc del dev "$IFACE" root 2>/dev/null
+        ;;
+    status)
+        echo "--- SQM status na $IFACE ---"
+        tc -s qdisc show dev "$IFACE" | grep -A 15 "qdisc cake"
+        ;;
+    *)
+        echo "Neznámý příkaz: $CMD"
+        echo "Použití: sudo sqm [start|stop|status] [rozhraní]"
+        exit 1
+        ;;
+esac

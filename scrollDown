@@ -1,0 +1,2 @@
+#!/bin/bash
+while true; do xdotool key Page_Down; sleep 0.2; done

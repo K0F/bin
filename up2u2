@@ -1,4 +1,4 @@
 #!/bin/bash
 cd /opt/tor-browser/Browser
 #./tor-browser --detach "https://chaturbate.com/"
-./start-tor-browser "http://privatecams.com"
+./start-tor-browser "http://chatrubate.com"

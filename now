@@ -1,13 +1,27 @@
 #!/bin/bash
-ARGS="$*"
-date +%s.%N
-echo `date +%s.%N` "$ARGS" >> /home/kof/src/now/log
 
+# Check if the first argument starts with [ and ends with ]
+if [[ "$1" =~ ^\[.*\]$ ]]; then
+    CATEGORY="${1^^}" # Uppercase the tag
+    shift             # Remove the category from the argument list
+    ARGS="$*"         # The rest of the message
+else
+    CATEGORY="GENERAL"
+    ARGS="$*"
+fi
+
+# Generate timestamp
+TS=$(date +%s.%N)
+
+# Log to file
+echo "$TS [$CATEGORY] $ARGS" >> /home/kof/src/now/log
+
+# Print to stdout
+echo "$TS"
+
+# Git operations
 cd /home/kof/src/now
-git commit -am "`date +%s.%N`"
+git commit -am "$TS [$CATEGORY] $ARGS"
 git pull
 git push
 
-#rsync -avzu home:Downloads ~/.
-#cd ~/Downloads
-#cp `ls -tr | tail -n 1` "$*"; mv "$*" ~/Pictures; cd ~/Pictures && postgen "$*"
