@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# sync-src: Parallel Git status checker and fast-forward puller for ~/src
+set -euo pipefail
+
+SRC_DIR="${1:-$HOME/src}"
+
+if [ ! -d "$SRC_DIR" ]; then
+    echo "Directory $SRC_DIR does not exist." >&2
+    exit 1
+fi
+
+check_repo() {
+    local dir="$1"
+    cd "$dir"
+    local name
+    name=$(basename "$dir")
+
+    # Silently fetch upstream
+    git fetch -q --all --prune 2>/dev/null || true
+
+    local dirty=""
+    if ! git diff-index --quiet HEAD -- 2>/dev/null || [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        dirty=" [DIRTY: uncommitted changes]"
+    fi
+
+    local upstream="@{u}"
+    local local_rev remote_rev base_rev status
+    if local_rev=$(git rev-parse @ 2>/dev/null) && remote_rev=$(git rev-parse "$upstream" 2>/dev/null); then
+        base_rev=$(git merge-base @ "$upstream" 2>/dev/null || true)
+        if [ "$local_rev" = "$remote_rev" ]; then
+            status="UP-TO-DATE"
+        elif [ "$local_rev" = "$base_rev" ]; then
+            status="BEHIND"
+            # Auto-pull clean repos
+            if [ -z "$dirty" ]; then
+                if git pull -q --ff-only 2>/dev/null; then
+                    status="PULLED"
+                fi
+            fi
+        elif [ "$remote_rev" = "$base_rev" ]; then
+            status="AHEAD"
+        else
+            status="DIVERGED"
+        fi
+    else
+        status="NO-UPSTREAM"
+    fi
+
+    printf "%-30s : %-15s%s\n" "$name" "$status" "$dirty"
+}
+export -f check_repo
+
+echo "== Scanning repositories in $SRC_DIR =="
+find "$SRC_DIR" -maxdepth 3 -name ".git" -type d 2>/dev/null | sed 's|/\.git$||' | sort -u | parallel -j 8 --keep-order check_repo {}
