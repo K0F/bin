@@ -49,35 +49,30 @@ while true; do
         fi
     fi
     
-    PAGE_FILE="$OUT_DIR/page_$(printf '%04d' $PAGE).pdf"
+    PAGE_FILE="$OUT_DIR/page_$(printf '%04d' $PAGE).jpg"
     printf "  [+] Skenuji stranu %03d (300 DPI True Gray)... " "$PAGE"
     
-    # Execute scan on bazina via USB
-    ssh bazina "scanimage -d 'brother4:bus1;dev8' --resolution 300 --mode 'True Gray' -x 210 -y 297 --format=pdf" > "$PAGE_FILE" 2>/dev/null || {
+    # Execute scan on bazina via USB (native JPEG output for zero-loss lossless packaging)
+    ssh bazina "scanimage -d 'brother4:bus1;dev8' --resolution 300 --mode 'True Gray' -x 210 -y 297 --format=jpeg" > "$PAGE_FILE" 2>/dev/null || {
         # Fallback to network airscan if USB re-enumerated
-        scanimage -d "airscan:w0:Brother DCP-J4120DW" --resolution 300 --mode "Gray" -x 210 -y 297 --format=pdf > "$PAGE_FILE" 2>/dev/null
+        scanimage -d "airscan:w0:Brother DCP-J4120DW" --resolution 300 --mode "Gray" -x 210 -y 297 --format=jpeg > "$PAGE_FILE" 2>/dev/null
     }
     
     if [ -s "$PAGE_FILE" ]; then
         echo "OK ($(du -h "$PAGE_FILE" | cut -f1))"
         PAGE=$((PAGE + 1))
     else
-        echo "CHYBA: Sken se nezdařil. Zkontrolujte připojení tiskárny a zkuste to znovu."
+        echo "CHYBA: Sken se nezdařil. Zkontrolujte tiskárnu a zkuste to znovu."
     fi
     echo ""
 done
 
-TOTAL_PAGES=$(ls -1 "$OUT_DIR"/page_*.pdf 2>/dev/null | wc -l)
+TOTAL_PAGES=$(ls -1 "$OUT_DIR"/page_*.jpg 2>/dev/null | wc -l)
 
 if [ "$TOTAL_PAGES" -gt 0 ]; then
     echo ""
     echo "[*] Spojuji $TOTAL_PAGES stran do výsledného PDF..."
-    if command -v pdfunite >/dev/null 2>&1; then
-        pdfunite "$OUT_DIR"/page_*.pdf "$FINAL_PDF"
-    else
-        convert "$OUT_DIR"/page_*.pdf "$FINAL_PDF"
-    fi
-    
+    img2pdf "$OUT_DIR"/page_*.jpg -o "$FINAL_PDF"
     ln -sf "$FINAL_PDF" "$HOME/Downloads/kniha.pdf"
     
     echo "======================================================================"

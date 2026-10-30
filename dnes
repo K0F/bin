@@ -1,18 +1,161 @@
-#!/bin/bash
-cd repos/dnes.git
-git init
+#!/usr/bin/env bash
+# dnes: Daily plan tracker and journal of done things with anti-recursion protection
+set -euo pipefail
 
-cat << 'EOF' > ./02_observator/mpd_drift_gate.patch
-diff --git a/main.go b/main.go
-index a2f3b4c..c5d6e7f 100644
---- a/main.go
-+++ b/main.go
-@@ -12,3 +12,3 @@ const (
--	DriftGate = 500 * time.Millisecond
-+	DriftGate = 300 * time.Millisecond
- 	MpdPort   = "6600"
- )
-EOF
+PLAN_DIR="$HOME/src/dnes"
+PLAN_FILE="$PLAN_DIR/plan.md"
+JOURNAL_FILE="$PLAN_DIR/journal.md"
+LOCK_FILE="/tmp/dnes-sync.lock"
+LOG_DIR="$HOME/.local/state/dnes"
+mkdir -p "$LOG_DIR"
 
-git add .
-git commit -m "init: kompletní struktura /dnes, vyčištěná administrativa a mpd patch"
+# Prevent recursive self-invocation
+if [ "${DNES_IN_SUBPROCESS:-0}" = "1" ]; then
+    echo "Warning: Nested dnes execution detected. Aborting recursion." >&2
+    exit 0
+fi
+export DNES_IN_SUBPROCESS=1
+
+cmd_done() {
+    local text="${*:-}"
+    if [ -z "$text" ]; then
+        echo "Usage: dnes done <description of completed task>" >&2
+        exit 1
+    fi
+
+    local today
+    today=$(date +%Y-%m-%d)
+    local time_now
+    time_now=$(date +%H:%M)
+
+    # Ensure journal file exists with header
+    if [ ! -f "$JOURNAL_FILE" ]; then
+        echo "# Journal / Hotovo" > "$JOURNAL_FILE"
+        echo "" >> "$JOURNAL_FILE"
+    fi
+
+    # Check if today's section exists; if not, create it
+    if ! grep -q "^## $today" "$JOURNAL_FILE" 2>/dev/null; then
+        echo "" >> "$JOURNAL_FILE"
+        echo "## $today" >> "$JOURNAL_FILE"
+    fi
+
+    # Append entry under today
+    echo "- [$time_now] $text" >> "$JOURNAL_FILE"
+    echo "Logged to journal: [$time_now] $text"
+
+    # Trigger Syncthing rescan so peers receive the entry immediately
+    local api_key
+    api_key=$(grep -oPm1 "(?<=<apikey>)[^<]+" "$HOME/.config/syncthing/config.xml" 2>/dev/null || true)
+    if [ -n "$api_key" ]; then
+        curl -s -f -X POST -H "X-API-Key: $api_key" "http://127.0.0.1:8384/rest/db/scan?folder=dnes" >/dev/null 2>&1 || true
+    fi
+}
+
+cmd_cron() {
+    exec 200>"$LOCK_FILE"
+    if ! flock -n 200; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Sync/cron already running. Skipping."
+        exit 0
+    fi
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting 23:45 nightly archive..."
+    cd "$PLAN_DIR"
+
+    # Git checkpoint
+    git add plan.md journal.md .gitignore .stignore 2>/dev/null || true
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+        local today
+        today=$(date +%Y-%m-%d)
+        git commit -m "archive ($today): nightly 23:45 snapshot"
+        git push origin main || echo "Warning: git push failed (remote offline or ahead)"
+        echo "Nightly Git checkpoint completed."
+    else
+        echo "No changes to commit."
+    fi
+
+    # Trigger Syncthing folder scan to ensure all peers have identical state
+    local api_key
+    api_key=$(grep -oPm1 "(?<=<apikey>)[^<]+" "$HOME/.config/syncthing/config.xml" 2>/dev/null || true)
+    if [ -n "$api_key" ]; then
+        curl -s -f -X POST -H "X-API-Key: $api_key" "http://127.0.0.1:8384/rest/db/scan?folder=dnes" >/dev/null 2>&1 || true
+    fi
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Nightly archive finished successfully."
+}
+
+cmd_view() {
+    if [ -f "$PLAN_FILE" ]; then
+        cat "$PLAN_FILE"
+    fi
+    if [ -f "$JOURNAL_FILE" ]; then
+        local today
+        today=$(date +%Y-%m-%d)
+        if grep -q "^## $today" "$JOURNAL_FILE" 2>/dev/null; then
+            echo ""
+            echo "---"
+            echo "### Dnes hotovo ($today):"
+            awk "/^## $today/{flag=1; next} /^## /{flag=0} flag" "$JOURNAL_FILE"
+        fi
+    fi
+}
+
+case "${1:-}" in
+    done|d|log)
+        shift
+        cmd_done "$@"
+        ;;
+    journal|j)
+        cat "$JOURNAL_FILE" 2>/dev/null || echo "No journal.md found"
+        ;;
+    plan|p)
+        cat "$PLAN_FILE" 2>/dev/null || echo "No plan.md found"
+        ;;
+    edit|e)
+        ${EDITOR:-vim} "$PLAN_FILE"
+        ;;
+    edit-journal|ej)
+        ${EDITOR:-vim} "$JOURNAL_FILE"
+        ;;
+    status|sync)
+        if command -v sync-scope >/dev/null 2>&1; then
+            sync-scope status
+        elif [ -x "$HOME/bin/sync-scope" ]; then
+            "$HOME/bin/sync-scope" status
+        fi
+        ;;
+    cron)
+        cmd_cron
+        ;;
+    git|commit)
+        shift || true
+        MSG="${*:-dnes update $(date +%s)}"
+        cd "$PLAN_DIR"
+        git add plan.md journal.md .gitignore .stignore 2>/dev/null || true
+        if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+            git commit -m "$MSG"
+            git push origin main
+            echo "Git checkpoint pushed."
+        else
+            echo "Working tree clean. Nothing to commit."
+        fi
+        ;;
+    help|-h|--help)
+        echo "dnes - Daily plan tracker & journal of done things"
+        echo ""
+        echo "Usage: dnes [command]"
+        echo ""
+        echo "Commands:"
+        echo "  (no args)           Show plan & today's completed journal items"
+        echo "  done <text>         Log completed task to journal.md with timestamp"
+        echo "  journal, j          Display complete journal.md"
+        echo "  plan, p             Display plan.md"
+        echo "  edit, e             Edit plan.md in \$EDITOR"
+        echo "  edit-journal, ej    Edit journal.md in \$EDITOR"
+        echo "  status              Show multi-device sync status"
+        echo "  git [msg]           Save manual Git commit checkpoint & push"
+        echo "  cron                Run nightly 23:45 archive routine"
+        ;;
+    *)
+        cmd_view
+        ;;
+esac
