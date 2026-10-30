@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# ~/bin/ap - Switch to plan mode and connect to fleet session
+"$HOME/bin/agy-mode" plan
+exec "$HOME/bin/af" "$@"

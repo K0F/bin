@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# ~/bin/af - Antigravity Fleet Unified Session Connector
+# Attaches to the central persistent Antigravity CLI session on boxC.
+
+SESSION_NAME="agy"
+CENTRAL_IP="10.0.0.14"
+CENTRAL_HOST="boxC"
+REMOTE_PORT="2222"
+EXTERNAL_HOST="home"
+
+# Determine current hostname
+CURRENT_HOST="$(hostname)"
+
+if [[ "$CURRENT_HOST" == "boxC" || "$CURRENT_HOST" == "B" ]]; then
+    # Already on central node: attach or create local tmux session
+    exec tmux new-session -A -s "$SESSION_NAME" agy "$@"
+else
+    # Remote node (bazina, t520, chromebook, or phone)
+    # 1. Try local LAN first
+    if ping -c 1 -W 1 "$CENTRAL_IP" &>/dev/null; then
+        exec ssh -t "$CENTRAL_HOST" "tmux new-session -A -s '$SESSION_NAME' agy $*"
+    else
+        # 2. Fallback to external SSH via home gateway
+        echo "LAN connection to $CENTRAL_HOST unreachable, attempting external fallback..."
+        exec ssh -p "$REMOTE_PORT" -t "$EXTERNAL_HOST" "tmux new-session -A -s '$SESSION_NAME' agy $*"
+    fi
+fi

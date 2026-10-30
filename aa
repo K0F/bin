@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# ~/bin/aa - Switch to accept-edits mode and connect to fleet session
+"$HOME/bin/agy-mode" act
+exec "$HOME/bin/af" "$@"

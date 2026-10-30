@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# ~/bin/agy-mode - Toggle Antigravity execution mode fleet-wide
+# Usage: agy-mode <act|plan|default>
+
+CONFIG="$HOME/.gemini/antigravity-cli/settings.json"
+
+if [[ ! -f "$CONFIG" ]]; then
+    echo "Error: $CONFIG not found." >&2
+    exit 1
+fi
+
+apply_mode() {
+    local target_mode="$1"
+    # Local update
+    sed -i -E "s/\"agentMode\": *\"[^\"]*\"/\"agentMode\": \"$target_mode\"/" "$CONFIG"
+    echo "✓ Local boxC agy mode set to: $target_mode"
+
+    # Propagate to reachable fleet nodes (bazina, t520) in background / quick ssh
+    for node in 10.0.0.15 10.0.0.18; do
+        if ping -c 1 -W 1 "$node" &>/dev/null; then
+            ssh -o ConnectTimeout=2 -o BatchMode=yes "$node" \
+                "test -f $CONFIG && sed -i -E 's/\"agentMode\": *\"[^\"]*\"/\"agentMode\": \"$target_mode\"/' $CONFIG" 2>/dev/null && \
+                echo "✓ Synced mode to $node" || true
+        fi
+    done
+}
+
+case "$1" in
+    plan|p)
+        apply_mode "plan"
+        ;;
+    act|accept-edits|a)
+        apply_mode "accept-edits"
+        ;;
+    default|d)
+        apply_mode "default"
+        ;;
+    status|"")
+        CURRENT=$(grep '"agentMode"' "$CONFIG" 2>/dev/null | tr -d '", ' | awk -F: '{print $2}')
+        echo "Current agy agentMode: ${CURRENT:-unknown}"
+        echo "Usage: agy-mode <act|plan|default>"
+        ;;
+    *)
+        echo "Unknown mode: $1" >&2
+        echo "Usage: agy-mode <act|plan|default>" >&2
+        exit 1
+        ;;
+esac
