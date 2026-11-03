@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# nbd-swap: High-speed RAM swap over network (10.0.0.15 bazina -> 10.0.0.18 t520)
+set -euo pipefail
+
+SERVER="10.0.0.15"
+PORT="10809"
+EXPORT="t520_swap"
+DEV="/dev/nbd0"
+
+status() {
+    echo "=== NBD Network Swap Status ==="
+    if swapon --show | grep -q "$DEV"; then
+        echo "Swap active on $DEV:"
+        swapon --show | grep "$DEV"
+    else
+        echo "Swap is NOT active on $DEV."
+    fi
+    if [ -b "$DEV" ] && lsblk "$DEV" | grep -q "$DEV"; then
+        lsblk "$DEV"
+    fi
+}
+
+start() {
+    sudo modprobe nbd
+    if swapon --show | grep -q "$DEV"; then
+        echo "Swap already active on $DEV."
+        exit 0
+    fi
+    # If device is connected, disconnect first
+    if lsblk "$DEV" 2>/dev/null | grep -q "nbd0"; then
+        sudo nbd-client -d "$DEV" 2>/dev/null || true
+        sleep 1
+    fi
+    echo "Connecting $DEV to $SERVER:$PORT ($EXPORT)..."
+    sudo nbd-client "$SERVER" "$PORT" -N "$EXPORT" "$DEV"
+    echo "Initializing and activating swap on $DEV (priority 100)..."
+    sudo mkswap "$DEV" >/dev/null
+    sudo swapon -p 100 "$DEV"
+    status
+}
+
+stop() {
+    echo "Deactivating swap on $DEV..."
+    if swapon --show | grep -q "$DEV"; then
+        sudo swapoff "$DEV"
+    fi
+    if lsblk "$DEV" 2>/dev/null | grep -q "nbd0"; then
+        echo "Disconnecting NBD client..."
+        sudo nbd-client -d "$DEV"
+    fi
+    echo "NBD swap stopped."
+}
+
+case "${1:-status}" in
+    start) start ;;
+    stop) stop ;;
+    status) status ;;
+    restart) stop; sleep 1; start ;;
+    *) echo "Usage: $0 {start|stop|restart|status}" ; exit 1 ;;
+esac

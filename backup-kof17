@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# backup-kof17: Incremental rsync backup of boxC:/mnt/kof17 to bazina SSD
+set -euo pipefail
+
+SRC="/mnt/data/"
+DEST="/mnt/ssd/kof17_backup/"
+LOG_FILE="/mnt/ssd/kof17_backup/backup.log"
+
+if [ ! -d "$SRC" ]; then
+    echo "Error: Source $SRC is not mounted!" >&2
+    exit 1
+fi
+
+if [ ! -d "/mnt/ssd" ]; then
+    echo "Error: /mnt/ssd is not mounted on this host!" >&2
+    exit 1
+fi
+
+mkdir -p "$DEST"
+echo "=== Starting kof17 backup: $(date -Iseconds) ===" | tee -a "$LOG_FILE"
+echo "Source: $SRC"
+echo "Destination: $DEST"
+
+rsync -aHAXx \
+    --numeric-ids \
+    --info=progress2 \
+    --delete \
+    --exclude='.Trash*' \
+    --exclude='lost+found' \
+    "$SRC" "$DEST" 2>&1 | tee -a "$LOG_FILE"
+
+echo "=== Backup completed: $(date -Iseconds) ===" | tee -a "$LOG_FILE"
