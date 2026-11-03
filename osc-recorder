@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""
+osc-recorder: Zero-dependency dated OSC sensor recorder for Android & IoT devices.
+Listens on UDP ports (e.g. 9000, 8000, 57120), automatically opens a dated session
+recording on incoming data, and saves to /mnt/ssd/recordings/osc/YYYY-MM-DD/
+"""
+
+import sys
+import os
+import time
+import socket
+import select
+import struct
+import signal
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+DEFAULT_DEST = "/mnt/ssd/recordings/osc"
+DEFAULT_PORTS = [9000, 8000, 57120]
+DEFAULT_TIMEOUT = 5.0  # seconds of inactivity to close session
+
+
+def parse_osc_message(data):
+    """Parse single OSC message: address, typetags, values."""
+    addr_end = data.find(b"\x00")
+    if addr_end == -1:
+        return None, []
+    try:
+        address = data[:addr_end].decode("ascii", errors="replace")
+    except Exception:
+        return None, []
+
+    idx = (addr_end + 4) & ~3
+    if idx >= len(data):
+        return address, []
+
+    if data[idx : idx + 1] != b",":
+        return address, []
+
+    tags_end = data.find(b"\x00", idx)
+    if tags_end == -1:
+        return address, []
+    try:
+        typetags = data[idx + 1 : tags_end].decode("ascii", errors="replace")
+    except Exception:
+        return address, []
+
+    idx = (tags_end + 4) & ~3
+    args = []
+
+    for tag in typetags:
+        if tag == "f":  # 32-bit float
+            if idx + 4 <= len(data):
+                val = struct.unpack(">f", data[idx : idx + 4])[0]
+                args.append(round(val, 6))
+                idx += 4
+        elif tag == "d":  # 64-bit float
+            if idx + 8 <= len(data):
+                val = struct.unpack(">d", data[idx : idx + 8])[0]
+                args.append(round(val, 6))
+                idx += 8
+        elif tag == "i":  # 32-bit int
+            if idx + 4 <= len(data):
+                val = struct.unpack(">i", data[idx : idx + 4])[0]
+                args.append(val)
+                idx += 4
+        elif tag == "h":  # 64-bit int
+            if idx + 8 <= len(data):
+                val = struct.unpack(">q", data[idx : idx + 8])[0]
+                args.append(val)
+                idx += 8
+        elif tag == "s":  # string
+            s_end = data.find(b"\x00", idx)
+            if s_end != -1:
+                val = data[idx:s_end].decode("utf-8", errors="replace")
+                args.append(val)
+                idx = (s_end + 4) & ~3
+            else:
+                break
+        elif tag == "T":  # True
+            args.append(True)
+        elif tag == "F":  # False
+            args.append(False)
+        elif tag == "N":  # Nil / None
+            args.append(None)
+        else:
+            # Skip unknown type tag
+            pass
+
+    return address, args
+
+
+def parse_osc_packet(data):
+    """Parse OSC packet (bundle or single message). Returns list of (address, args)."""
+    if data.startswith(b"#bundle\x00"):
+        idx = 16
+        messages = []
+        while idx + 4 <= len(data):
+            size = struct.unpack(">i", data[idx : idx + 4])[0]
+            idx += 4
+            if idx + size <= len(data):
+                sub = parse_osc_packet(data[idx : idx + size])
+                messages.extend(sub)
+                idx += size
+            else:
+                break
+        return messages
+    else:
+        addr, args = parse_osc_message(data)
+        if addr:
+            return [(addr, args)]
+        return []
+
+
+class OscRecorder:
+    def __init__(self, dest_root, ports, session_timeout=5.0, verbose=True):
+        self.dest_root = Path(dest_root)
+        self.ports = ports
+        self.session_timeout = session_timeout
+        self.verbose = verbose
+        self.running = True
+
+        self.current_session_file = None
+        self.current_session_path = None
+        self.session_start_time = None
+        self.session_last_time = None
+        self.session_packets_count = 0
+        self.session_sources = set()
+        self.session_addresses = set()
+
+    def start_session(self, first_time, source_addr):
+        now_dt = datetime.fromtimestamp(first_time)
+        date_str = now_dt.strftime("%Y-%m-%d")
+        time_str = now_dt.strftime("%H%M%S")
+        day_dir = self.dest_root / date_str
+        day_dir.mkdir(parents=True, exist_ok=True)
+
+        session_filename = f"session_{now_dt.strftime('%Y%m%d_%H%M%S')}.csv"
+        self.current_session_path = day_dir / session_filename
+        self.current_session_file = open(self.current_session_path, "w", encoding="utf-8", buffering=1)
+
+        self.session_start_time = first_time
+        self.session_last_time = first_time
+        self.session_packets_count = 0
+        self.session_sources = {source_addr[0]}
+        self.session_addresses = set()
+
+        # Write CSV Header
+        self.current_session_file.write(f"# OSC Session Record\n")
+        self.current_session_file.write(f"# Start: {now_dt.isoformat()}\n")
+        self.current_session_file.write(f"# Source: {source_addr[0]}:{source_addr[1]}\n")
+        self.current_session_file.write(f"timestamp,elapsed_sec,source_ip,osc_address,data\n")
+
+        # Update latest symlink
+        latest_link = self.dest_root / "latest.csv"
+        try:
+            if latest_link.is_symlink() or latest_link.exists():
+                latest_link.unlink()
+            latest_link.symlink_to(self.current_session_path)
+        except Exception:
+            pass
+
+        if self.verbose:
+            print(f"[{now_dt.strftime('%H:%M:%S')}] Started new OSC session: {self.current_session_path} (from {source_addr[0]})", flush=True)
+
+    def close_session(self):
+        if self.current_session_file:
+            duration = self.session_last_time - self.session_start_time
+            end_dt = datetime.fromtimestamp(self.session_last_time)
+            self.current_session_file.write(f"# End: {end_dt.isoformat()} (duration: {duration:.2f}s, packets: {self.session_packets_count})\n")
+            self.current_session_file.close()
+
+            if self.verbose:
+                addrs_str = ", ".join(sorted(self.session_addresses)) if self.session_addresses else "none"
+                print(f"[{end_dt.strftime('%H:%M:%S')}] Closed session {self.current_session_path.name}: {self.session_packets_count} pkts, {duration:.2f}s, addresses: [{addrs_str}]", flush=True)
+
+            self.current_session_file = None
+            self.current_session_path = None
+            self.session_start_time = None
+            self.session_last_time = None
+            self.session_packets_count = 0
+
+    def record_packet(self, data, source_addr, port):
+        now_ts = time.time()
+
+        # Check if we should close previous session due to timeout
+        if self.current_session_file and (now_ts - self.session_last_time > self.session_timeout):
+            self.close_session()
+
+        # Start session if not currently open
+        if not self.current_session_file:
+            self.start_session(now_ts, source_addr)
+
+        self.session_last_time = now_ts
+        self.session_sources.add(source_addr[0])
+
+        parsed_messages = parse_osc_packet(data)
+        elapsed = now_ts - self.session_start_time
+        iso_str = datetime.fromtimestamp(now_ts).isoformat()
+
+        if not parsed_messages:
+            # Raw unparseable data
+            raw_hex = data.hex()
+            self.current_session_file.write(f"{iso_str},{elapsed:.6f},{source_addr[0]},/raw,{raw_hex}\n")
+            self.session_packets_count += 1
+            return
+
+        for addr, args in parsed_messages:
+            self.session_addresses.add(addr)
+            args_str = " ".join(str(a) for a in args) if args else ""
+            self.current_session_file.write(f"{iso_str},{elapsed:.6f},{source_addr[0]},{addr},{args_str}\n")
+            self.session_packets_count += 1
+
+    def run(self):
+        sockets = []
+        for port in self.ports:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                # Allow broadcast reception
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.bind(("0.0.0.0", port))
+                s.setblocking(False)
+                sockets.append(s)
+                if self.verbose:
+                    print(f"Bound UDP socket on 0.0.0.0:{port}", flush=True)
+            except Exception as e:
+                print(f"Warning: Failed to bind on UDP port {port}: {e}", file=sys.stderr)
+
+        if not sockets:
+            print("Error: No sockets could be bound. Exiting.", file=sys.stderr)
+            return 1
+
+        print(f"OSC Recorder listening on ports {self.ports}. Target directory: {self.dest_root}", flush=True)
+
+        while self.running:
+            # Select with timeout so we can detect session timeout
+            readable, _, _ = select.select(sockets, [], [], 1.0)
+            now_ts = time.time()
+
+            # Handle session timeout if idle
+            if self.current_session_file and (now_ts - self.session_last_time > self.session_timeout):
+                self.close_session()
+
+            for s in readable:
+                try:
+                    data, addr = s.recvfrom(65535)
+                    local_port = s.getsockname()[1]
+                    self.record_packet(data, addr, local_port)
+                except Exception as e:
+                    print(f"Error reading socket: {e}", file=sys.stderr)
+
+        self.close_session()
+        for s in sockets:
+            s.close()
+        print("OSC Recorder stopped.", flush=True)
+        return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Zero-dependency dated OSC sensor recorder")
+    parser.add_argument("--dest", "-d", default=DEFAULT_DEST, help=f"Destination directory (default: {DEFAULT_DEST})")
+    parser.add_argument("--ports", "-p", nargs="+", type=int, default=DEFAULT_PORTS, help=f"UDP ports to listen on (default: {' '.join(map(str, DEFAULT_PORTS))})")
+    parser.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT, help=f"Inactivity timeout to close session in seconds (default: {DEFAULT_TIMEOUT})")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode (no verbose prints)")
+
+    args = parser.parse_args()
+
+    recorder = OscRecorder(
+        dest_root=args.dest,
+        ports=args.ports,
+        session_timeout=args.timeout,
+        verbose=not args.quiet
+    )
+
+    def sig_handler(sig, frame):
+        print(f"\nReceived signal {sig}, terminating...", flush=True)
+        recorder.running = False
+
+    signal.signal(signal.SIGINT, sig_handler)
+    signal.signal(signal.SIGTERM, sig_handler)
+
+    sys.exit(recorder.run())
+
+
+if __name__ == "__main__":
+    main()
