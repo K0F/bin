@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# phone-timesync: Precision clock synchronization between t520 (Master) and Android (Slave)
+# Fleet Techné 2026
+
+TARGET_IP="192.168.1.103"
+ADB_TARGET="192.168.1.103:5555"
+MASTER_IP="192.168.1.100"
+
+echo "[*] Ověřuji časovou synchronizaci telefonu s centrálními hodinami t520 ($MASTER_IP)..."
+
+# 1. Connect wireless ADB if not already connected
+if ! adb devices | grep -q "$TARGET_IP"; then
+    adb connect "$ADB_TARGET" >/dev/null 2>&1
+fi
+
+# 2. Check current settings on Android
+CURRENT_NTP=$(adb -s "$ADB_TARGET" shell settings get global ntp_server 2>/dev/null | tr -d '\r')
+if [ "$CURRENT_NTP" != "$MASTER_IP" ]; then
+    echo "[*] Nastavuji globální NTP server Androidu na $MASTER_IP..."
+    adb -s "$ADB_TARGET" shell settings put global ntp_server "$MASTER_IP"
+    adb -s "$ADB_TARGET" shell settings put global ntp_timeout 5000
+else
+    echo "[✓] Globální NTP server Androidu je nastaven na: $CURRENT_NTP"
+fi
+
+# 3. Query current time offset via Termux Python NTP query
+python3 - << EOF
+import socket, struct, time, sys
+
+try:
+    c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    c.settimeout(2.0)
+    # Query Chrony on t520
+    data = b'\x1b' + 47 * b'\0'
+    t1 = time.time()
+    c.sendto(data, ('$MASTER_IP', 123))
+    data, _ = c.recvfrom(1024)
+    t4 = time.time()
+    unpacked = struct.unpack('!12I', data)
+    t2 = unpacked[8] + float(unpacked[9]) / 2**32 - 2208988800
+    t3 = unpacked[10] + float(unpacked[11]) / 2**32 - 2208988800
+    rtt = (t4 - t1) - (t3 - t2)
+    print(f"[✓] Stratum 1 Chrony na $MASTER_IP odpovídá (RTT: {rtt*1000:.2f} ms)")
+except Exception as e:
+    print(f"[-] Chyba dotazu na NTP: {e}")
+EOF
+
+# 4. Trigger NetworkTimeUpdateService resync on Android
+adb -s "$ADB_TARGET" shell "cmd time_detector clear_network_time; cmd time_detector set_auto_detection_enabled false; sleep 0.2; cmd time_detector set_auto_detection_enabled true" >/dev/null 2>&1
+echo "[✓] Služba time_detector na Androidu byla resetována a navázána na $MASTER_IP."
