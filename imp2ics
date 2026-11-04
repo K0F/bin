@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""
+imp2ics: Convert OKsoftware "Svátky a výročí" (.imp) files to RFC 5545 iCalendar (.ics) and Google Calendar CSV.
+Developed for Kof / Dell backup restoration.
+
+Supports strict RFC 5545 compliance:
+- CRLF line endings
+- 75-octet line folding
+- DTSTART and DTEND (DATE format, exclusive DTEND = next day)
+- TRANSP:TRANSPARENT (all-day events don't block user availability)
+- RRULE:FREQ=YEARLY for recurring dates
+- Proper text escaping (commas, semicolons, backslashes, newlines)
+- CSV export for Google Calendar and Microsoft Outlook
+"""
+import sys
+import os
+import io
+import csv
+import glob
+import re
+import struct
+import uuid
+from datetime import datetime, timedelta, timezone
+
+DELPHI_EPOCH = datetime(1899, 12, 30)
+
+TYPE_NAMES = {
+    0: "Narozeniny",
+    1: "Výročí",
+    2: "Událost",
+    3: "Připomenutí",
+    4: "Svátek"
+}
+
+def normalize_name(name):
+    s = re.sub(r'\s+', ' ', name.strip())
+    s = re.sub(r'^\*\s*', '* ', s)
+    s = re.sub(r'^\†\s*', '† ', s)
+    return s
+
+def escape_ics_text(text):
+    if not text:
+        return ""
+    s = str(text)
+    s = s.replace('\\', '\\\\')
+    s = s.replace(';', r'\;')
+    s = s.replace(',', r'\,')
+    s = s.replace('\r\n', r'\n').replace('\r', r'\n').replace('\n', r'\n')
+    return s
+
+def fold_line(line, limit=75):
+    encoded = line.encode('utf-8')
+    if len(encoded) <= limit:
+        return line
+    parts = []
+    while len(encoded) > limit:
+        cut = limit
+        # Walk backward if we land in the middle of a multi-byte UTF-8 character
+        while cut > 0 and (encoded[cut] & 0xC0) == 0x80:
+            cut -= 1
+        parts.append(encoded[:cut].decode('utf-8'))
+        encoded = b' ' + encoded[cut:]
+    if encoded:
+        parts.append(encoded.decode('utf-8'))
+    return "\r\n".join(parts)
+
+def parse_imp(filepath):
+    with open(filepath, 'rb') as f:
+        data = f.read()
+
+    pos = 0
+    tokens = []
+    while pos < len(data):
+        b = data[pos]
+        pos += 1
+        if b == 0x00:
+            tokens.append(('END', None))
+        elif b == 0x01:
+            tokens.append(('LIST', None))
+        elif b == 0x02:
+            tokens.append(('INT8', data[pos]))
+            pos += 1
+        elif b == 0x03:
+            tokens.append(('INT16', struct.unpack('<h', data[pos:pos+2])[0]))
+            pos += 2
+        elif b == 0x04:
+            tokens.append(('INT32', struct.unpack('<i', data[pos:pos+4])[0]))
+            pos += 4
+        elif b == 0x06:
+            slen = data[pos]
+            pos += 1
+            s = data[pos:pos+slen].decode('utf-8', errors='replace')
+            pos += slen
+            tokens.append(('STR', s))
+        elif b == 0x14:
+            slen = struct.unpack('<I', data[pos:pos+4])[0]
+            pos += 4
+            s = data[pos:pos+slen].decode('utf-8', errors='replace')
+            pos += slen
+            tokens.append(('STR', s))
+        else:
+            pass
+
+    events = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t[0] in ('INT16', 'INT32'):
+            days = t[1]
+            if i + 2 < len(tokens) and tokens[i+1][0] == 'INT8' and tokens[i+2][0] == 'STR':
+                etype = tokens[i+1][1]
+                ename = tokens[i+2][1].strip()
+                try:
+                    dt = DELPHI_EPOCH + timedelta(days=days)
+                    events.append({
+                        "date": dt,
+                        "type": etype,
+                        "name": ename,
+                        "source": os.path.basename(filepath)
+                    })
+                except OverflowError:
+                    pass
+                i += 3
+                continue
+        i += 1
+    return events
+
+def deduplicate_events(events):
+    seen = {}
+    for ev in events:
+        nname = normalize_name(ev["name"])
+        dt = ev["date"]
+        etype = ev["type"]
+        key = (nname.lower(), dt.month, dt.day, etype)
+        if key not in seen:
+            ev_copy = dict(ev)
+            ev_copy["name"] = nname
+            seen[key] = ev_copy
+    return list(seen.values())
+
+def events_to_ics(events, cal_name="Svátky a výročí"):
+    deduped = deduplicate_events(events)
+    now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    raw_lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Antigravity Fleet//Svátky a výročí 2006//CS",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        f"X-WR-CALNAME:{escape_ics_text(cal_name)}",
+        "X-WR-TIMEZONE:Europe/Prague"
+    ]
+
+    for ev in deduped:
+        dt = ev["date"]
+        dt_end = dt + timedelta(days=1)
+        etype = ev["type"]
+        ename = ev["name"]
+        tname = TYPE_NAMES.get(etype, "Událost")
+
+        uid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{ename}_{dt.strftime('%Y%m%d')}_{etype}"))
+        dt_str = dt.strftime("%Y%m%d")
+        dt_end_str = dt_end.strftime("%Y%m%d")
+
+        raw_lines.append("BEGIN:VEVENT")
+        raw_lines.append(f"UID:{uid}")
+        raw_lines.append(f"DTSTAMP:{now_str}")
+        raw_lines.append(f"DTSTART;VALUE=DATE:{dt_str}")
+        raw_lines.append(f"DTEND;VALUE=DATE:{dt_end_str}")
+        raw_lines.append(f"SUMMARY:{escape_ics_text(ename)}")
+
+        if etype == 0:
+            desc = f"Narozeniny: {ename}\nRok narození: {dt.year}"
+        elif etype == 1:
+            desc = f"Výročí: {ename}\nOd roku: {dt.year}"
+        elif etype == 4:
+            desc = f"Svátek: {ename}"
+        else:
+            desc = f"{tname}: {ename}\nZáznam z roku: {dt.year}"
+
+        raw_lines.append(f"DESCRIPTION:{escape_ics_text(desc)}")
+        raw_lines.append(f"CATEGORIES:{escape_ics_text(tname)}")
+        raw_lines.append("STATUS:CONFIRMED")
+        raw_lines.append("TRANSP:TRANSPARENT")
+
+        if etype != 3:  # Only one-off reminders do not recur
+            raw_lines.append("RRULE:FREQ=YEARLY")
+
+        raw_lines.append("END:VEVENT")
+
+    raw_lines.append("END:VCALENDAR")
+
+    folded_lines = [fold_line(line) for line in raw_lines]
+    return "\r\n".join(folded_lines) + "\r\n"
+
+def events_to_csv(events, project_upcoming_years=1):
+    """
+    Export events to Google Calendar / Outlook CSV format.
+    If project_upcoming_years > 1, generates repeating occurrences for future years
+    (since CSV does not natively support RRULE recurrence).
+    """
+    deduped = deduplicate_events(events)
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow([
+        "Subject",
+        "Start Date",
+        "Start Time",
+        "End Date",
+        "End Time",
+        "All Day Event",
+        "Description",
+        "Location",
+        "Private"
+    ])
+
+    current_year = datetime.now().year
+    years_to_project = [current_year + i for i in range(project_upcoming_years)] if project_upcoming_years > 1 else [None]
+
+    for ev in deduped:
+        dt = ev["date"]
+        etype = ev["type"]
+        ename = ev["name"]
+        tname = TYPE_NAMES.get(etype, "Událost")
+
+        if etype == 0:
+            base_desc = f"Narozeniny: {ename} (rok narození {dt.year})"
+        elif etype == 1:
+            base_desc = f"Výročí: {ename} (od roku {dt.year})"
+        elif etype == 4:
+            base_desc = f"Svátek: {ename}"
+        else:
+            base_desc = f"{tname}: {ename} (záznam z roku {dt.year})"
+
+        if project_upcoming_years > 1 and etype != 3:
+            for yr in years_to_project:
+                try:
+                    occ_dt = dt.replace(year=yr)
+                except ValueError:
+                    occ_dt = dt.replace(year=yr, day=28)
+
+                age = yr - dt.year
+                if etype == 0 and age >= 0:
+                    desc = f"{base_desc} - {age}. narozeniny"
+                elif etype == 1 and age >= 0:
+                    desc = f"{base_desc} - {age}. výročí"
+                else:
+                    desc = base_desc
+
+                d_str = occ_dt.strftime("%m/%d/%Y")
+                writer.writerow([ename, d_str, "", d_str, "", "True", desc, "", "False"])
+        else:
+            d_str = dt.strftime("%m/%d/%Y")
+            writer.writerow([ename, d_str, "", d_str, "", "True", base_desc, "", "False"])
+
+    return output.getvalue()
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Convert OKsoftware .imp files to iCalendar (.ics) and Google Calendar CSV")
+    parser.add_argument("inputs", nargs="+", help="Files (.imp) or directories")
+    parser.add_argument("-o", "--output", help="Output file path (.ics or .csv)")
+    parser.add_argument("--format", choices=["ics", "csv"], default="ics", help="Output format (default: ics)")
+    parser.add_argument("--name", default="Svátky a výročí", help="Calendar name (X-WR-CALNAME)")
+    parser.add_argument("--project-years", type=int, default=5, help="Number of upcoming years to project in CSV (default: 5)")
+
+    args = parser.parse_args()
+
+    files = []
+    for p in args.inputs:
+        if os.path.isdir(p):
+            files.extend(glob.glob(os.path.join(p, "**", "*.imp"), recursive=True))
+        else:
+            files.append(p)
+
+    all_events = []
+    for f in sorted(files):
+        evs = parse_imp(f)
+        all_events.extend(evs)
+
+    fmt = args.format
+    if args.output:
+        if args.output.lower().endswith(".csv"):
+            fmt = "csv"
+        elif args.output.lower().endswith(".ics"):
+            fmt = "ics"
+
+    if fmt == "csv":
+        content = events_to_csv(all_events, project_upcoming_years=args.project_years)
+    else:
+        content = events_to_ics(all_events, cal_name=args.name)
+
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"Exported {len(all_events)} events -> {args.output} ({fmt.upper()})", file=sys.stderr)
+    else:
+        sys.stdout.write(content)
+
+if __name__ == '__main__':
+    main()

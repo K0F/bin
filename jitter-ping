@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# jitter-ping: Quick ICMP RTT Jitter Benchmark in Bash
+# Usage: jitter-ping <target_ip> [count] [interval_sec]
+
+TARGET="${1:-192.168.1.104}"
+COUNT="${2:-100}"
+INTERVAL="${3:-0.02}" # 20ms by default (50 pkts/sec)
+
+echo "[*] Spouštím ICMP jitter benchmark na cíl $TARGET ($COUNT paketů, interval ${INTERVAL}s)..."
+
+# Run ping and extract rtt times
+ping -c "$COUNT" -i "$INTERVAL" -q "$TARGET" | awk -F'/' '
+/min\/avg\/max\/mdev/ {
+    split($5, val, " ")
+    min = $4
+    avg = $5
+    max = $6
+    mdev = $7
+    sub(/ .*/, "", min)
+    sub(/ .*/, "", avg)
+    sub(/ .*/, "", max)
+    sub(/ .*/, "", mdev)
+    
+    printf "\n==================== ICMP RTT VÝSLEDKY ====================\n"
+    printf "  Cíl:                  %s\n", "'"$TARGET"'"
+    printf "  Minimální RTT:        %8.3f ms\n", min
+    printf "  Průměrný RTT:         %8.3f ms\n", avg
+    printf "  Maximální RTT:        %8.3f ms\n", max
+    printf "  Jitter (mdev / dev):  %8.3f ms (%8.1f µs)\n", mdev, mdev * 1000.0
+    printf "===========================================================\n"
+}
+/packets transmitted/ {
+    printf "  Přenos paketů:        %s\n", $0
+}
+'
