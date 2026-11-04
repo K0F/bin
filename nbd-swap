@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# nbd-swap: High-speed RAM swap over network (10.0.0.15 bazina -> 10.0.0.18 t520)
+# nbd-swap: High-speed RAM swap over network (192.168.1.104 bazina -> 192.168.1.100 t520)
 set -euo pipefail
 
-SERVER="10.0.0.15"
+SERVER="192.168.1.104"
 PORT="10809"
 EXPORT="t520_swap"
 DEV="/dev/nbd0"
