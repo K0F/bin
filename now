@@ -1,10 +1,15 @@
 #!/bin/bash
 
-# Check if the first argument starts with [ and ends with ]
-if [[ "$1" =~ ^\[.*\]$ ]]; then
-    CATEGORY="${1^^}" # Uppercase the tag
-    shift             # Remove the category from the argument list
-    ARGS="$*"         # The rest of the message
+# Check if category tag is provided, e.g. [TAG] or "[TAG] message"
+if [[ "$1" =~ ^\[([^]]+)\][[:space:]]*(.*)$ ]]; then
+    CATEGORY="${BASH_REMATCH[1]^^}"
+    REST="${BASH_REMATCH[2]}"
+    shift
+    if [ -n "$REST" ]; then
+        ARGS="$REST${*:+ }$*"
+    else
+        ARGS="$*"
+    fi
 else
     CATEGORY="GENERAL"
     ARGS="$*"
