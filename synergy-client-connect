@@ -24,12 +24,18 @@ find_active_server() {
     return 1
 }
 
+# Determine crypto flag based on synergyc build
+CRYPTO_FLAG=""
+if /usr/local/bin/synergyc --help 2>&1 | grep -q -- '--disable-crypto'; then
+    CRYPTO_FLAG="--disable-crypto"
+fi
+
 echo "[synergy-connect] Starting dynamic Synergy client for '$CLIENT_NAME'..."
 
 while true; do
     if ACTIVE_SERVER=$(find_active_server); then
         echo "[synergy-connect] Found active server at $ACTIVE_SERVER. Connecting..."
-        /usr/local/bin/synergyc -f --disable-crypto --name "$CLIENT_NAME" "$ACTIVE_SERVER" || true
+        /usr/local/bin/synergyc -f $CRYPTO_FLAG --name "$CLIENT_NAME" "$ACTIVE_SERVER" || true
         echo "[synergy-connect] Synergy client exited or disconnected. Probing again in 2s..."
     else
         echo "[synergy-connect] No reachable t520 server on Ethernet/WiFi/VPN. Retrying in 3s..."
