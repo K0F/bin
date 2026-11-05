@@ -1,14 +1,41 @@
-# ~/bin/bin-env — Architecture-Aware Fleet Path Setup
-# Sourced in ~/.bashrc and ~/.zshrc across t520, bazina, boxC, penguin, phone
+# ~/bin/bin-env — Architecture-Aware Fleet Path & Identity Setup
+# Sourced in ~/.bashrc and ~/.zshrc across t520, bazina, boxC, penguin, android
 
 _ARCH="$(uname -m)"
-if [ -d "$HOME/bin/arch/$_ARCH" ]; then
+export FLEET_ARCH="$_ARCH"
+
+# Determine unique fleet node ID
+if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+    export FLEET_NODE="android"
+elif [ -f "/etc/fleet_id" ]; then
+    # Load explicit machine identifier if present
+    . /etc/fleet_id 2>/dev/null || true
+fi
+
+if [ -z "$FLEET_NODE" ]; then
+    _HOST="$(hostname -s 2>/dev/null || uname -n)"
+    case "$_HOST" in
+        t520*|workstation*) export FLEET_NODE="t520" ;;
+        bazina*)            export FLEET_NODE="bazina" ;;
+        boxC*|B)            export FLEET_NODE="boxC" ;;
+        penguin*|crostini*) export FLEET_NODE="penguin" ;;
+        localhost|android*) export FLEET_NODE="android" ;;
+        *)                  export FLEET_NODE="$_HOST" ;;
+    esac
+    unset _HOST
+fi
+
+export FLEET_SIGN="[${FLEET_NODE}:${FLEET_ARCH}]"
+
+# Architecture-specific binary path
+if [ -d "$HOME/bin/arch/$FLEET_ARCH" ]; then
     case ":$PATH:" in
-        *":$HOME/bin/arch/$_ARCH:"*) ;;
-        *) export PATH="$HOME/bin/arch/$_ARCH:$PATH" ;;
+        *":$HOME/bin/arch/$FLEET_ARCH:"*) ;;
+        *) export PATH="$HOME/bin/arch/$FLEET_ARCH:$PATH" ;;
     esac
 fi
 
+# General ~/bin path
 case ":$PATH:" in
     *":$HOME/bin:"*) ;;
     *) export PATH="$HOME/bin:$PATH" ;;

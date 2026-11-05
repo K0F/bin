@@ -138,6 +138,9 @@ def main():
         payload = {
             "name": hostname,
             "hostname": hostname,
+            "node": hostname,
+            "arch": os.uname().machine,
+            "sign": f"[{hostname}:{os.uname().machine}]",
             "timestamp": time.time(),
             "cpu_percent": cpu_pct,
             "mem_used_gb": mem_used,

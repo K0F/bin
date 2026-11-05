@@ -1,48 +1,51 @@
 #!/usr/bin/env bash
 # ~/bin/af - Antigravity Fleet Unified Session Connector
-# Attaches to the central persistent Antigravity CLI session on bazina.
+# Attaches to the central persistent Antigravity CLI session (default: bazina).
 
 SESSION_NAME="agy"
-CENTRAL_HOST="bazina"
-CENTRAL_IP="192.168.1.104"
-CENTRAL_LEGACY_IP="10.0.0.15"
+DEFAULT_HOST="bazina"
+DEFAULT_IP="192.168.1.104"
+FALLBACK_HOST="boxC"
+FALLBACK_IP="192.168.1.101"
 REMOTE_PORT="2222"
 EXTERNAL_HOST="home"
+DEFAULT_CONV="9860fe31-3526-48d1-9063-3e58e630faf9"
 
-# Ensure -c (continue previous session) is always included unless already specified
-HAS_CONTINUE=false
-for arg in "$@"; do
-    if [[ "$arg" == "-c" || "$arg" == "--continue" || "$arg" == --conversation* ]]; then
-        HAS_CONTINUE=true
-        break
-    fi
-done
-
-if [[ "$HAS_CONTINUE" == false ]]; then
-    AGY_ARGS=("-c" "$@")
-else
-    AGY_ARGS=("$@")
+# Determine current node
+CURRENT_HOST="$(hostname -s 2>/dev/null || uname -n)"
+if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+    CURRENT_HOST="phone"
 fi
 
-# Determine current hostname
-CURRENT_HOST="$(hostname)"
+# Build agy conversation parameter if not already supplied
+AGY_INVOCATION="agy"
+if [[ "$*" != *"--conversation"* ]] && [[ -n "$DEFAULT_CONV" ]]; then
+    AGY_INVOCATION="agy --conversation=$DEFAULT_CONV"
+fi
 
-# Prevent tmux nesting error if already inside another tmux session
-unset TMUX
-
-if [[ "$CURRENT_HOST" == "$CENTRAL_HOST" ]]; then
-    # Already on central node (bazina): attach or create local tmux session
-    exec tmux new-session -A -s "$SESSION_NAME" agy "${AGY_ARGS[@]}"
-else
-    # Remote node (t520, boxC, penguin, or phone)
-    CMD_ARGS=$(printf "%q " "${AGY_ARGS[@]}")
-
-    # 1. Try local LAN first (by hostname or IP)
-    if ping -c 1 -W 1 "$CENTRAL_HOST" &>/dev/null || ping -c 1 -W 1 "$CENTRAL_IP" &>/dev/null || ping -c 1 -W 1 "$CENTRAL_LEGACY_IP" &>/dev/null; then
-        exec ssh -t "$CENTRAL_HOST" "tmux new-session -A -s '$SESSION_NAME' agy $CMD_ARGS"
+if [[ "$CURRENT_HOST" == "bazina" ]]; then
+    # Already on default node (bazina): attach or create local tmux session
+    exec tmux new-session -A -s "$SESSION_NAME" $AGY_INVOCATION "$@"
+elif [[ "$CURRENT_HOST" == "boxC" || "$CURRENT_HOST" == "B" ]]; then
+    # On boxC: connect to bazina if reachable, otherwise fall back to local boxC session
+    if ping -c 1 -W 1 "$DEFAULT_IP" &>/dev/null || ssh -o BatchMode=yes -o ConnectTimeout=2 "$DEFAULT_HOST" "true" &>/dev/null; then
+        exec ssh -t "$DEFAULT_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
     else
-        # 2. Fallback to external SSH via home gateway (boxC) jumping to bazina
-        echo "LAN connection to $CENTRAL_HOST unreachable, attempting external fallback via $EXTERNAL_HOST..."
-        exec ssh -p "$REMOTE_PORT" -t "$EXTERNAL_HOST" "ssh -t '$CENTRAL_HOST' \"tmux new-session -A -s '$SESSION_NAME' agy $CMD_ARGS\""
+        echo "[af] bazina is unreachable from boxC; falling back to local boxC session..."
+        exec tmux new-session -A -s "$SESSION_NAME" $AGY_INVOCATION "$@"
+    fi
+else
+    # Remote node (t520, penguin, android/phone, etc.)
+    # 1. Try default node (bazina) on LAN
+    if ping -c 1 -W 1 "$DEFAULT_IP" &>/dev/null || ssh -o BatchMode=yes -o ConnectTimeout=2 "$DEFAULT_HOST" "true" &>/dev/null; then
+        exec ssh -t "$DEFAULT_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
+    # 2. Fallback to boxC on LAN
+    elif ping -c 1 -W 1 "$FALLBACK_IP" &>/dev/null || ssh -o BatchMode=yes -o ConnectTimeout=2 "$FALLBACK_HOST" "true" &>/dev/null; then
+        echo "[af] bazina unreachable; falling back to boxC on LAN..."
+        exec ssh -t "$FALLBACK_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
+    # 3. Fallback to external SSH via home gateway
+    else
+        echo "[af] LAN unreachable; attempting external gateway fallback..."
+        exec ssh -p "$REMOTE_PORT" -t "$EXTERNAL_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
     fi
 fi

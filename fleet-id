@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# fleet-id: Print unique identifier, architecture, and badge for current fleet node
+
+if [ -z "$FLEET_NODE" ] || [ -z "$FLEET_ARCH" ]; then
+    [ -f "$HOME/bin/bin-env" ] && source "$HOME/bin/bin-env" 2>/dev/null || true
+fi
+
+FLEET_NODE="${FLEET_NODE:-$(hostname -s 2>/dev/null || uname -n)}"
+FLEET_ARCH="${FLEET_ARCH:-$(uname -m)}"
+FLEET_SIGN="${FLEET_SIGN:-[${FLEET_NODE}:${FLEET_ARCH}]}"
+
+case "$1" in
+    --node|-n)
+        echo "$FLEET_NODE"
+        ;;
+    --arch|-a)
+        echo "$FLEET_ARCH"
+        ;;
+    --sign|-s)
+        echo "$FLEET_SIGN"
+        ;;
+    --json|-j)
+        printf '{"node":"%s","arch":"%s","sign":"%s","hostname":"%s"}\n' \
+            "$FLEET_NODE" "$FLEET_ARCH" "$FLEET_SIGN" "$(hostname 2>/dev/null || uname -n)"
+        ;;
+    *)
+        echo "FLEET_NODE=$FLEET_NODE"
+        echo "FLEET_ARCH=$FLEET_ARCH"
+        echo "FLEET_SIGN=$FLEET_SIGN"
+        ;;
+esac
