@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# fleet-log-check: Autonomous daily log auditor and journal aggregator for t520, bazina, and boxC
+set -euo pipefail
+
+TODAY=$(date +%Y-%m-%d)
+NOW_TS=$(date +%H:%M:%S)
+ARCHIVE_DIR="$HOME/src/journals-fleet"
+AUDIT_FILE="$ARCHIVE_DIR/system-audits/${TODAY}.md"
+DNES_DIR="$HOME/src/dnes"
+LOGS_DIR="$DNES_DIR/logs"
+
+mkdir -p "$ARCHIVE_DIR/system-audits" "$ARCHIVE_DIR/dnes" "$ARCHIVE_DIR/now" "$LOGS_DIR"
+
+ALERT_COUNT=0
+ALERTS=()
+
+echo "=== Running Fleet Daily Audit for $TODAY ==="
+
+# --- 1. AUDIT boxC ---
+BOXC_HOST="boxC"
+BOXC_ONLINE=0
+BOXC_KOF17_AVAIL="N/A"
+BOXC_KOF17_PCT="N/A"
+BOXC_SYNCTHING="N/A"
+BOXC_FAILED_UNITS=""
+BOXC_RECENT_ERRORS=""
+BOXC_SSH_BLOCKED=0
+
+if ssh -o ConnectTimeout=3 "$BOXC_HOST" "true" 2>/dev/null; then
+    BOXC_ONLINE=1
+    # Check /mnt/kof17 disk space
+    read -r b_avail b_pct < <(ssh "$BOXC_HOST" "df -BG /mnt/kof17 | awk 'NR==2 {print \$4, \$5}'" 2>/dev/null || echo "0G 100%")
+    BOXC_KOF17_AVAIL="$b_avail"
+    BOXC_KOF17_PCT="$b_pct"
+    
+    # Check threshold: if available < 3G or pct >= 98%
+    AVAIL_NUM=$(echo "$b_avail" | tr -dc '0-9' || echo 0)
+    if [ "$AVAIL_NUM" -le 2 ]; then
+        ALERT_COUNT=$((ALERT_COUNT + 1))
+        ALERTS+=("CRITICAL: boxC /mnt/kof17 is critically low on space ($BOXC_KOF17_AVAIL free, $BOXC_KOF17_PCT used)!")
+    fi
+
+    # Syncthing status & errors
+    BOXC_SYNCTHING=$(ssh "$BOXC_HOST" "systemctl --user is-active syncthing 2>&1" || echo "failed")
+    SYNCTHING_ERRS=$(ssh "$BOXC_HOST" "journalctl --user -u syncthing --since '24 hours ago' --no-pager 2>/dev/null | grep -E 'connection reset by peer|TLS handshake|FATAL|ERROR' | tail -n 5" || true)
+
+    # Failed units
+    BOXC_FAILED_UNITS=$(ssh "$BOXC_HOST" "systemctl --failed --no-legend 2>/dev/null; systemctl --user --failed --no-legend 2>/dev/null" || true)
+    if [ -n "$BOXC_FAILED_UNITS" ]; then
+        ALERT_COUNT=$((ALERT_COUNT + 1))
+        ALERTS+=("WARNING: boxC has failed systemd units: $BOXC_FAILED_UNITS")
+    fi
+
+    # Journal errors
+    BOXC_RECENT_ERRORS=$(ssh "$BOXC_HOST" "journalctl -p err..emerg --since '24 hours ago' --no-pager 2>/dev/null | tail -n 8" || true)
+
+    # SSH blocker count
+    BOXC_SSH_BLOCKED=$(ssh "$BOXC_HOST" "grep -c 'DROP' /tmp/ssh_blocked.log 2>/dev/null || echo 0" || true)
+else
+    ALERT_COUNT=$((ALERT_COUNT + 1))
+    ALERTS+=("CRITICAL: boxC is UNREACHABLE over SSH!")
+fi
+
+# --- 2. AUDIT bazina ---
+BAZINA_HOST="bazina"
+BAZINA_ONLINE=0
+BAZINA_SSD_AVAIL="N/A"
+BAZINA_SEAGATE_AVAIL="N/A"
+BAZINA_LOAD="N/A"
+BAZINA_MEM="N/A"
+BAZINA_OSC_REC="N/A"
+
+if ssh -o ConnectTimeout=3 "$BAZINA_HOST" "true" 2>/dev/null; then
+    BAZINA_ONLINE=1
+    BAZINA_SSD_AVAIL=$(ssh "$BAZINA_HOST" "df -h /mnt/ssd 2>/dev/null | awk 'NR==2 {print \$4}'" || echo "N/A")
+    BAZINA_SEAGATE_AVAIL=$(ssh "$BAZINA_HOST" "df -h /mnt/seagate 2>/dev/null | awk 'NR==2 {print \$4}'" || echo "N/A")
+    BAZINA_LOAD=$(ssh "$BAZINA_HOST" "uptime | awk -F'load average:' '{print \$2}' | sed 's/ //g'" || echo "N/A")
+    BAZINA_MEM=$(ssh "$BAZINA_HOST" "free -h | awk '/Mem:/ {print \$3 \"/\" \$2}'" || echo "N/A")
+    BAZINA_OSC_REC=$(ssh "$BAZINA_HOST" "systemctl is-active osc-recorder.service 2>/dev/null" || echo "inactive")
+else
+    ALERT_COUNT=$((ALERT_COUNT + 1))
+    ALERTS+=("CRITICAL: bazina is UNREACHABLE over SSH!")
+fi
+
+# --- 3. AUDIT t520 (Local) ---
+T520_LOAD=$(uptime | awk -F'load average:' '{print $2}' | sed 's/ //g')
+T520_MEM=$(free -h | awk '/Mem:/ {print $3 "/" $2}')
+T520_ZRAM=$(zramctl --noheadings 2>/dev/null | awk '{print $1 " size:" $3 " used:" $4 " comp:" $6}' || echo "inactive")
+CHRONY_DRIFT=$(chronyc tracking 2>/dev/null | awk '/Last offset/ {print $4 " " $5}' || echo "N/A")
+CHRONY_STRATUM=$(chronyc tracking 2>/dev/null | awk '/Stratum/ {print $3}' || echo "N/A")
+
+# --- 4. GENERATE MARKDOWN AUDIT REPORT ---
+cat << EOF > "$AUDIT_FILE"
+# Fleet System Audit: $TODAY ($NOW_TS CET)
+
+## Health Summary
+- **Overall Status**: $([ "$ALERT_COUNT" -eq 0 ] && echo "🟢 ALL SYSTEMS HEALTHY" || echo "🔴 $ALERT_COUNT ALERTS DETECTED")
+- **Active Nodes**: t520 (local), bazina ($([ "$BAZINA_ONLINE" -eq 1 ] && echo "ONLINE" || echo "OFFLINE")), boxC ($([ "$BOXC_ONLINE" -eq 1 ] && echo "ONLINE" || echo "OFFLINE"))
+
+$([ "$ALERT_COUNT" -gt 0 ] && echo "### Active Alerts" && for a in "${ALERTS[@]}"; do echo "- ⚠️ $a"; done || true)
+
+---
+
+## 1. Node Telemetry Matrix
+
+| Node | Reachable | Memory (Used/Total) | Storage Status | Key Daemons / Swap | Load Avg |
+|:---|:---|:---|:---|:---|:---|
+| **t520** | Local | $T520_MEM | Root ext4 / zram0 ($T520_ZRAM) | Chrony Stratum $CHRONY_STRATUM (offset $CHRONY_DRIFT) | $T520_LOAD |
+| **bazina** | $([ "$BAZINA_ONLINE" -eq 1 ] && echo "Yes" || echo "No") | $BAZINA_MEM | SSD: $BAZINA_SSD_AVAIL free \| Seagate: $BAZINA_SEAGATE_AVAIL | osc-recorder: $BAZINA_OSC_REC | $BAZINA_LOAD |
+| **boxC** | $([ "$BOXC_ONLINE" -eq 1 ] && echo "Yes" || echo "No") | - | **/mnt/kof17: $BOXC_KOF17_AVAIL free ($BOXC_KOF17_PCT)** | Syncthing: $BOXC_SYNCTHING | - |
+
+---
+
+## 2. boxC Storage & Daemon Diagnostics
+- **/mnt/kof17 Available**: $BOXC_KOF17_AVAIL (Threshold: alert if <= 2G)
+- **Syncthing Unit**: $BOXC_SYNCTHING
+$([ -n "${SYNCTHING_ERRS:-}" ] && echo "\`\`\`" && echo "$SYNCTHING_ERRS" && echo "\`\`\`" || echo "- Syncthing connection logs: Clean.")
+
+### Systemd Failed Units (boxC):
+$([ -n "$BOXC_FAILED_UNITS" ] && echo "$BOXC_FAILED_UNITS" || echo "None. All units operational.")
+
+### Recent Critical/Error Logs (24h boxC):
+$([ -n "$BOXC_RECENT_ERRORS" ] && echo "\`\`\`" && echo "$BOXC_RECENT_ERRORS" && echo "\`\`\`" || echo "None recorded.")
+
+---
+
+## 3. Fleet Synchronization Checkpoints
+- Mirror target: \`bazina:/mnt/ssd/repos/journals-fleet.git\`
+- Dnes mirror: \`bazina:/mnt/ssd/repos/dnes.git\`
+- Now mirror: \`bazina:/mnt/ssd/repos/now.git\`
+EOF
+
+# Symlink to dnes logs directory
+ln -sfn "$AUDIT_FILE" "$LOGS_DIR/fleet_audit_${TODAY}.md"
+
+# --- 5. REPOSITORY COLLECTION & PUSH ---
+# Copy latest human journals into archive
+[ -f "$DNES_DIR/journal.md" ] && cp -f "$DNES_DIR/journal.md" "$ARCHIVE_DIR/dnes/journal.md"
+[ -f "$DNES_DIR/plan.md" ] && cp -f "$DNES_DIR/plan.md" "$ARCHIVE_DIR/dnes/plan.md"
+[ -f "$HOME/src/now/log" ] && cp -f "$HOME/src/now/log" "$ARCHIVE_DIR/now/log"
+
+cd "$ARCHIVE_DIR"
+git add .
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    git commit -m "fleet audit ($TODAY): boxC kof17: $BOXC_KOF17_AVAIL, syncthing: $BOXC_SYNCTHING, alerts: $ALERT_COUNT"
+    git push origin main || echo "Warning: Push to bazina failed"
+    echo "Fleet journal audit committed and pushed to bazina big disk."
+else
+    echo "Working tree clean. Nothing new to commit."
+fi
+
+# Log via now
+if command -v now >/dev/null 2>&1; then
+    now "[FLEET-AUDIT] Daily check ($TODAY) finished: alerts=$ALERT_COUNT, boxC kof17=$BOXC_KOF17_AVAIL"
+fi
+
+echo "=== Fleet Daily Audit Complete ==="
+if [ "$ALERT_COUNT" -gt 0 ]; then
+    echo "WARNING: $ALERT_COUNT alerts detected!"
+    exit 1
+fi
+exit 0
