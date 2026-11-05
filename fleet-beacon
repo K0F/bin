@@ -101,6 +101,16 @@ def read_temp():
                 pass
     return 0
 
+def read_battery():
+    # Probe ACPI / sysfs battery capacity
+    for p in glob.glob("/sys/class/power_supply/BAT*/capacity") + glob.glob("/sys/class/power_supply/*battery*/capacity") + glob.glob("/sys/class/power_supply/sbs-*/capacity"):
+        try:
+            with open(p, "r") as f:
+                return int(f.read().strip())
+        except Exception:
+            pass
+    return -1
+
 def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -115,12 +125,15 @@ def main():
         mount, disk_free, disk_total = read_disk()
         gpu_str = read_gpu()
         temp_c = read_temp()
+        bat_pct = read_battery()
 
         alert = ""
         if hostname == "boxC" and mount == "/mnt/kof17" and disk_free < 3.0:
             alert = f"kof17 CRITICAL: {disk_free}G free"
         elif hostname == "penguin" and disk_free < 1.0:
             alert = f"penguin LOW DISK: {disk_free}G free"
+        elif bat_pct >= 0 and bat_pct <= 15:
+            alert = f"{hostname} BATTERY CRITICAL: {bat_pct}%"
 
         payload = {
             "name": hostname,
@@ -134,6 +147,7 @@ def main():
             "disk_total_gb": disk_total,
             "gpu_str": gpu_str,
             "temp_c": temp_c,
+            "battery_percent": bat_pct,
             "alert": alert
         }
 
