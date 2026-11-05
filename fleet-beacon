@@ -17,7 +17,25 @@ import glob
 import urllib.request
 
 PORT = 9850
-TARGETS = ["<broadcast>", "192.168.1.255", "192.168.1.100", "192.168.1.102", "10.0.0.255", "10.0.0.18", "10.0.0.14", "91.139.118.43", "192.168.43.255", "192.168.43.1", "127.0.0.1"]
+TARGETS = [
+    "<broadcast>",
+    "192.168.1.255",
+    "192.168.1.100",  # t520 (Ethernet)
+    "192.168.1.102",  # t520 (WiFi)
+    "192.168.1.104",  # bazina (Debian 13)
+    "192.168.1.101",  # boxC (RPi storage)
+    "192.168.1.105",  # penguin (Chromebook)
+    "192.168.1.103",  # phone (Android)
+    "10.39.9.255",    # WireGuard VPN Broadcast
+    "10.39.9.1",      # boxC VPN
+    "10.0.0.255",
+    "10.0.0.18",
+    "10.0.0.14",
+    "91.139.118.43",
+    "192.168.43.255",
+    "192.168.43.1",
+    "127.0.0.1"
+]
 
 def get_hostname():
     if os.path.exists("/data/data/com.termux") or "TERMUX_VERSION" in os.environ:

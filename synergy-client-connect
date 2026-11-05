@@ -24,9 +24,9 @@ find_active_server() {
     return 1
 }
 
-# Determine crypto flag based on synergyc build
+# Determine crypto flag based on synergyc build (note: synergyc --help exits with code 3)
 CRYPTO_FLAG=""
-if /usr/local/bin/synergyc --help 2>&1 | grep -q -- '--disable-crypto'; then
+if (/usr/local/bin/synergyc --help 2>&1 || true) | grep -q -- '--disable-crypto'; then
     CRYPTO_FLAG="--disable-crypto"
 fi
 
