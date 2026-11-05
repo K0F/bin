@@ -44,6 +44,16 @@ cmd_done() {
     echo "- [$time_now] $text" >> "$JOURNAL_FILE"
     echo "Logged to journal: [$time_now] $text"
 
+    # Git checkpoint to trigger post-commit hook for Konzdat update
+    (
+        cd "$PLAN_DIR"
+        git add "$JOURNAL_FILE" 2>/dev/null || true
+        if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+            git commit -m "dnes: $text" >/dev/null 2>&1 || true
+            git push origin main >/dev/null 2>&1 || true
+        fi
+    ) &
+
     # Trigger Syncthing rescan so peers receive the entry immediately
     local api_key
     api_key=$(grep -oPm1 "(?<=<apikey>)[^<]+" "$HOME/.config/syncthing/config.xml" 2>/dev/null || true)
