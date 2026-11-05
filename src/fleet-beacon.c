@@ -144,43 +144,36 @@ static void resolve_identity(char *node, size_t n_len, char *arch, size_t a_len,
 }
 
 static double read_cpu_cpufreq_fallback(void) {
-    glob_t gl;
     double sum_pct = 0.0;
     int count = 0;
-    if (glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq", 0, NULL, &gl) == 0) {
-        for (size_t i = 0; i < gl.gl_pathc; ++i) {
-            long cur = 0, min_f = 0, max_f = 0;
-            FILE *fp = fopen(gl.gl_pathv[i], "r");
-            if (fp) {
-                if (fscanf(fp, "%ld", &cur) != 1) cur = 0;
-                fclose(fp);
-            }
-            char path_buf[256];
-            snprintf(path_buf, sizeof(path_buf), "%s", gl.gl_pathv[i]);
-            char *slash = strrchr(path_buf, '/');
-            if (slash) {
-                strcpy(slash + 1, "cpuinfo_min_freq");
-                fp = fopen(path_buf, "r");
-                if (fp) {
-                    if (fscanf(fp, "%ld", &min_f) != 1) min_f = 0;
-                    fclose(fp);
-                }
-                strcpy(slash + 1, "cpuinfo_max_freq");
-                fp = fopen(path_buf, "r");
-                if (fp) {
-                    if (fscanf(fp, "%ld", &max_f) != 1) max_f = 0;
-                    fclose(fp);
-                }
-            }
-            if (max_f > min_f && cur >= min_f) {
-                double c_pct = ((double)(cur - min_f) / (double)(max_f - min_f)) * 100.0;
-                if (c_pct < 0.0) c_pct = 0.0;
-                if (c_pct > 100.0) c_pct = 100.0;
-                sum_pct += c_pct;
-                count++;
-            }
+    for (int c = 0; c < 16; ++c) {
+        char p_cur[128], p_min[128], p_max[128];
+        snprintf(p_cur, sizeof(p_cur), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", c);
+        snprintf(p_min, sizeof(p_min), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_min_freq", c);
+        snprintf(p_max, sizeof(p_max), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c);
+        long cur = 0, min_f = 0, max_f = 0;
+        FILE *fp = fopen(p_cur, "r");
+        if (!fp) continue;
+        if (fscanf(fp, "%ld", &cur) != 1) cur = 0;
+        fclose(fp);
+
+        fp = fopen(p_min, "r");
+        if (fp) {
+            if (fscanf(fp, "%ld", &min_f) != 1) min_f = 0;
+            fclose(fp);
         }
-        globfree(&gl);
+        fp = fopen(p_max, "r");
+        if (fp) {
+            if (fscanf(fp, "%ld", &max_f) != 1) max_f = 0;
+            fclose(fp);
+        }
+        if (max_f > min_f && cur >= min_f) {
+            double c_pct = ((double)(cur - min_f) / (double)(max_f - min_f)) * 100.0;
+            if (c_pct < 0.0) c_pct = 0.0;
+            if (c_pct > 100.0) c_pct = 100.0;
+            sum_pct += c_pct;
+            count++;
+        }
     }
     return (count > 0) ? (sum_pct / (double)count) : 0.0;
 }

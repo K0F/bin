@@ -21,7 +21,7 @@ fi
 
 if [ -n "$CC_BIN" ] && [ -f "$BIN_DIR/src/fleet-beacon.c" ]; then
     if [ ! -x "$BIN_DIR/fleet-beacon-c" ] || [ "$BIN_DIR/src/fleet-beacon.c" -nt "$BIN_DIR/fleet-beacon-c" ]; then
-        "$CC_BIN" -O2 -Wall -Wextra -pedantic -o "$BIN_DIR/fleet-beacon-c" "$BIN_DIR/src/fleet-beacon.c" 2>/dev/null || true
+        "$CC_BIN" -O2 -Wall -Wextra -pedantic -o "$BIN_DIR/fleet-beacon-c.tmp.$$" "$BIN_DIR/src/fleet-beacon.c" 2>/dev/null && mv -f "$BIN_DIR/fleet-beacon-c.tmp.$$" "$BIN_DIR/fleet-beacon-c" || rm -f "$BIN_DIR/fleet-beacon-c.tmp.$$"
     fi
 fi
 
