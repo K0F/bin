@@ -11,17 +11,23 @@ if [ -z "$FLEET_NODE" ] || [ -z "$FLEET_ARCH" ]; then
     [ -f "$BIN_DIR/bin-env" ] && source "$BIN_DIR/bin-env" 2>/dev/null || true
 fi
 
-# 1. Prefer native C compiled binary (< 1MB RAM, 0% CPU)
-if [ -x "$BIN_DIR/fleet-beacon-c" ]; then
-    exec "$BIN_DIR/fleet-beacon-c" "$@"
+# 1. Compile or recompile native C binary if source is newer or binary missing
+CC_BIN=""
+if command -v gcc >/dev/null 2>&1; then
+    CC_BIN="gcc"
+elif command -v clang >/dev/null 2>&1; then
+    CC_BIN="clang"
 fi
 
-# 2. Compile native C binary on the fly if compiler exists
-if command -v gcc >/dev/null 2>&1 && [ -f "$BIN_DIR/src/fleet-beacon.c" ]; then
-    gcc -O2 -Wall -Wextra -pedantic -o "$BIN_DIR/fleet-beacon-c" "$BIN_DIR/src/fleet-beacon.c" 2>/dev/null || true
-    if [ -x "$BIN_DIR/fleet-beacon-c" ]; then
-        exec "$BIN_DIR/fleet-beacon-c" "$@"
+if [ -n "$CC_BIN" ] && [ -f "$BIN_DIR/src/fleet-beacon.c" ]; then
+    if [ ! -x "$BIN_DIR/fleet-beacon-c" ] || [ "$BIN_DIR/src/fleet-beacon.c" -nt "$BIN_DIR/fleet-beacon-c" ]; then
+        "$CC_BIN" -O2 -Wall -Wextra -pedantic -o "$BIN_DIR/fleet-beacon-c" "$BIN_DIR/src/fleet-beacon.c" 2>/dev/null || true
     fi
+fi
+
+# 2. Prefer native C compiled binary (< 1MB RAM, 0% CPU)
+if [ -x "$BIN_DIR/fleet-beacon-c" ]; then
+    exec "$BIN_DIR/fleet-beacon-c" "$@"
 fi
 
 # 3. Fallback to pure Bash implementation

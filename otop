@@ -4,8 +4,13 @@
 # =============================================================================
 ARCH="$(uname -m)"
 
-# 1. Nativní architektura v ~/bin/arch/$ARCH/otop
-if [ -x "$HOME/bin/arch/$ARCH/otop" ]; then
+# 0. Termux / Android Bionic: prefer local Bionic build first
+if [ -d "/data/data/com.termux" ] && [ -x "$HOME/src/observator/otop/bin/otop" ]; then
+    exec "$HOME/src/observator/otop/bin/otop" "$@"
+fi
+
+# 1. Nativní architektura v ~/bin/arch/$ARCH/otop (glibc Linux)
+if [ ! -d "/data/data/com.termux" ] && [ -x "$HOME/bin/arch/$ARCH/otop" ]; then
     exec "$HOME/bin/arch/$ARCH/otop" "$@"
 fi
 
@@ -19,12 +24,14 @@ if [ -x "/usr/local/bin/otop" ]; then
     exec "/usr/local/bin/otop" "$@"
 fi
 
-# 4. Automatické stažení pro x86_64 pokud chybí
-if [ "$ARCH" = "x86_64" ]; then
-    mkdir -p "$HOME/bin/arch/x86_64"
-    if curl -sL https://xn--peek-h6a.com/otop-x86_64 -o "$HOME/bin/arch/x86_64/otop" || curl -sL http://91.139.118.43/otop-x86_64 -o "$HOME/bin/arch/x86_64/otop"; then
-        chmod +x "$HOME/bin/arch/x86_64/otop"
-        exec "$HOME/bin/arch/x86_64/otop" "$@"
+# 4. Automatické stažení pro x86_64 / aarch64 (glibc Linux) pokud chybí
+if [ ! -d "/data/data/com.termux" ] && { [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "aarch64" ]; }; then
+    mkdir -p "$HOME/bin/arch/$ARCH"
+    if curl -sfL "http://192.168.1.101/otop-$ARCH" -o "$HOME/bin/arch/$ARCH/otop" || \
+       curl -sfL "https://xn--peek-h6a.com/otop-$ARCH" -o "$HOME/bin/arch/$ARCH/otop" || \
+       curl -sfL "http://91.139.118.43/otop-$ARCH" -o "$HOME/bin/arch/$ARCH/otop"; then
+        chmod +x "$HOME/bin/arch/$ARCH/otop"
+        exec "$HOME/bin/arch/$ARCH/otop" "$@"
     fi
 fi
 

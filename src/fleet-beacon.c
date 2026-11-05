@@ -143,21 +143,63 @@ static void resolve_identity(char *node, size_t n_len, char *arch, size_t a_len,
     }
 }
 
+static double read_cpu_cpufreq_fallback(void) {
+    glob_t gl;
+    double sum_pct = 0.0;
+    int count = 0;
+    if (glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq", 0, NULL, &gl) == 0) {
+        for (size_t i = 0; i < gl.gl_pathc; ++i) {
+            long cur = 0, min_f = 0, max_f = 0;
+            FILE *fp = fopen(gl.gl_pathv[i], "r");
+            if (fp) {
+                if (fscanf(fp, "%ld", &cur) != 1) cur = 0;
+                fclose(fp);
+            }
+            char path_buf[256];
+            snprintf(path_buf, sizeof(path_buf), "%s", gl.gl_pathv[i]);
+            char *slash = strrchr(path_buf, '/');
+            if (slash) {
+                strcpy(slash + 1, "cpuinfo_min_freq");
+                fp = fopen(path_buf, "r");
+                if (fp) {
+                    if (fscanf(fp, "%ld", &min_f) != 1) min_f = 0;
+                    fclose(fp);
+                }
+                strcpy(slash + 1, "cpuinfo_max_freq");
+                fp = fopen(path_buf, "r");
+                if (fp) {
+                    if (fscanf(fp, "%ld", &max_f) != 1) max_f = 0;
+                    fclose(fp);
+                }
+            }
+            if (max_f > min_f && cur >= min_f) {
+                double c_pct = ((double)(cur - min_f) / (double)(max_f - min_f)) * 100.0;
+                if (c_pct < 0.0) c_pct = 0.0;
+                if (c_pct > 100.0) c_pct = 100.0;
+                sum_pct += c_pct;
+                count++;
+            }
+        }
+        globfree(&gl);
+    }
+    return (count > 0) ? (sum_pct / (double)count) : 0.0;
+}
+
 static double read_cpu(unsigned long long *prev_work, unsigned long long *prev_total) {
     FILE *fp = fopen("/proc/stat", "r");
-    if (!fp) return 0.0;
+    if (!fp) return read_cpu_cpufreq_fallback();
 
     char line[256];
     if (!fgets(line, sizeof(line), fp)) {
         fclose(fp);
-        return 0.0;
+        return read_cpu_cpufreq_fallback();
     }
     fclose(fp);
 
     unsigned long long user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
     if (sscanf(line, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
                &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) < 4) {
-        return 0.0;
+        return read_cpu_cpufreq_fallback();
     }
 
     unsigned long long work = user + nice + system + irq + softirq + steal;
@@ -222,6 +264,10 @@ static void read_disk(const char *node, char *mount_out, size_t m_len, double *f
     } else if (strcmp(node, "bazina") == 0) {
         candidates[0] = "/mnt/ssd";
         candidates[1] = "/mnt/seagate";
+        candidates[2] = "/";
+    } else if (strcmp(node, "android") == 0 || strcmp(node, "phone") == 0) {
+        candidates[0] = "/data";
+        candidates[1] = "/data/data/com.termux";
         candidates[2] = "/";
     }
 
@@ -309,8 +355,46 @@ static int read_battery(void) {
     return -1;
 }
 
+static const char *get_shm_path(void) {
+    if (access("/dev/shm", W_OK) == 0) {
+        return "/dev/shm/fleet_telemetry.json";
+    }
+    if (access("/data/data/com.termux/files/usr/tmp", W_OK) == 0) {
+        return "/data/data/com.termux/files/usr/tmp/fleet_telemetry.json";
+    }
+    return "/tmp/fleet_telemetry.json";
+}
+
+static int extract_json_str(const char *buf, const char *key, char *out, size_t out_len) {
+    char pat[64];
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char *pos = strstr(buf, pat);
+    if (!pos) return 0;
+    const char *colon = strchr(pos + strlen(pat), ':');
+    if (!colon) return 0;
+    const char *q1 = strchr(colon + 1, '"');
+    if (!q1) return 0;
+    const char *q2 = strchr(q1 + 1, '"');
+    if (!q2) return 0;
+    size_t len = (size_t)(q2 - (q1 + 1));
+    if (len >= out_len) len = out_len - 1;
+    memcpy(out, q1 + 1, len);
+    out[len] = '\0';
+    return 1;
+}
+
+static double extract_json_num(const char *buf, const char *key) {
+    char pat[64];
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char *pos = strstr(buf, pat);
+    if (!pos) return -1.0;
+    const char *colon = strchr(pos + strlen(pat), ':');
+    if (!colon) return -1.0;
+    return strtod(colon + 1, NULL);
+}
+
 static void update_shm(const char *node, const char *payload) {
-    const char *shm_path = "/dev/shm/fleet_telemetry.json";
+    const char *shm_path = get_shm_path();
     char tmp_path[256];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", shm_path, (int)getpid());
 
@@ -326,16 +410,23 @@ static void update_shm(const char *node, const char *payload) {
     FILE *out = fopen(tmp_path, "w");
     if (!out) return;
 
+    double now_ts = (double)time(NULL);
+
     /* Write simple JSON envelope */
     if (in_buf[0] == '{') {
         /* Filter out existing node key and append new */
         fprintf(out, "{\n");
         int wrote_any = 0;
 
-        /* Scan and copy other nodes */
+        /* Scan and copy other nodes if still fresh (< 30s) */
         const char *known[] = { "t520", "bazina", "boxC", "crostini", "penguin", "android", "phone", NULL };
         for (int k = 0; known[k] != NULL; ++k) {
             if (strcmp(known[k], node) == 0) continue;
+            if ((strcmp(node, "crostini") == 0 && strcmp(known[k], "penguin") == 0) ||
+                (strcmp(node, "penguin") == 0 && strcmp(known[k], "crostini") == 0)) continue;
+            if ((strcmp(node, "android") == 0 && strcmp(known[k], "phone") == 0) ||
+                (strcmp(node, "phone") == 0 && strcmp(known[k], "android") == 0)) continue;
+
             char needle[64];
             snprintf(needle, sizeof(needle), "\"%s\":", known[k]);
             char *pos = strstr(in_buf, needle);
@@ -351,10 +442,19 @@ static void update_shm(const char *node, const char *payload) {
                         ptr++;
                     }
                     if (depth == 0) {
-                        if (wrote_any) fprintf(out, ",\n");
-                        fprintf(out, "  \"%s\": ", known[k]);
-                        fwrite(brace_start, 1, (size_t)(ptr - brace_start), out);
-                        wrote_any = 1;
+                        size_t obj_len = (size_t)(ptr - brace_start);
+                        char obj_buf[4096];
+                        if (obj_len < sizeof(obj_buf)) {
+                            memcpy(obj_buf, brace_start, obj_len);
+                            obj_buf[obj_len] = '\0';
+                            double ts = extract_json_num(obj_buf, "timestamp");
+                            if (ts <= 0.0 || (now_ts - ts) <= 30.0) {
+                                if (wrote_any) fprintf(out, ",\n");
+                                fprintf(out, "  \"%s\": ", known[k]);
+                                fwrite(brace_start, 1, obj_len, out);
+                                wrote_any = 1;
+                            }
+                        }
                     }
                 }
             }
@@ -371,36 +471,147 @@ static void update_shm(const char *node, const char *payload) {
     rename(tmp_path, shm_path);
 }
 
-static void send_wan_http(const char *payload) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return;
-
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 500000;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-    struct sockaddr_in srv;
-    memset(&srv, 0, sizeof(srv));
-    srv.sin_family = AF_INET;
-    srv.sin_port = htons(80);
-    inet_pton(AF_INET, "91.139.118.43", &srv.sin_addr);
-
-    if (connect(sock, (struct sockaddr *)&srv, sizeof(srv)) == 0) {
-        char req[4096];
-        int req_len = snprintf(req, sizeof(req),
-            "POST /telemetry.php HTTP/1.1\r\n"
-            "Host: 91.139.118.43\r\n"
-            "Content-Type: application/json\r\n"
-            "Content-Length: %zu\r\n"
-            "Connection: close\r\n\r\n"
-            "%s", strlen(payload), payload);
-        if (req_len > 0) {
-            write(sock, req, (size_t)req_len);
+static void drain_udp_and_wan(int udp_sock, const char *local_node) {
+    /* 1. Drain incoming UDP telemetry packets on port 9850 */
+    if (udp_sock >= 0) {
+        char buf[4096];
+        while (1) {
+            ssize_t n = recv(udp_sock, buf, sizeof(buf) - 1, 0);
+            if (n <= 0) break;
+            buf[n] = '\0';
+            char rnode[64] = {0};
+            if (!extract_json_str(buf, "node", rnode, sizeof(rnode))) {
+                extract_json_str(buf, "name", rnode, sizeof(rnode));
+            }
+            if (rnode[0] != '\0' && strcmp(rnode, local_node) != 0) {
+                update_shm(rnode, buf);
+            }
         }
     }
-    close(sock);
+
+    /* 2. On boxC, merge /dev/shm/fleet_wan_*.json (< 30s old) and rebroadcast NAT nodes */
+    glob_t gl;
+    if (glob("/dev/shm/fleet_wan_*.json", 0, NULL, &gl) == 0) {
+        time_t now = time(NULL);
+        for (size_t i = 0; i < gl.gl_pathc; ++i) {
+            struct stat st;
+            if (stat(gl.gl_pathv[i], &st) == 0 && (now - st.st_mtime) < 30) {
+                FILE *fp = fopen(gl.gl_pathv[i], "r");
+                if (fp) {
+                    char wbuf[4096] = {0};
+                    size_t wn = fread(wbuf, 1, sizeof(wbuf) - 1, fp);
+                    fclose(fp);
+                    if (wn > 0 && wbuf[0] == '{') {
+                        wbuf[wn] = '\0';
+                        char wnode[64] = {0};
+                        if (!extract_json_str(wbuf, "node", wnode, sizeof(wnode))) {
+                            extract_json_str(wbuf, "name", wnode, sizeof(wnode));
+                        }
+                        if (wnode[0] != '\0' && strcmp(wnode, local_node) != 0) {
+                            update_shm(wnode, wbuf);
+                            /* Rebroadcast NAT/WAN nodes (penguin/crostini/android) to LAN */
+                            if (udp_sock >= 0 && (strcmp(wnode, "penguin") == 0 || strcmp(wnode, "crostini") == 0 || strcmp(wnode, "android") == 0 || strcmp(wnode, "phone") == 0)) {
+                                const char *lan_targets[] = { "192.168.1.255", "192.168.1.100", "192.168.1.104", "192.168.1.103", NULL };
+                                for (int t = 0; lan_targets[t] != NULL; ++t) {
+                                    struct sockaddr_in sin;
+                                    memset(&sin, 0, sizeof(sin));
+                                    sin.sin_family = AF_INET;
+                                    sin.sin_port = htons(BEACON_PORT);
+                                    if (inet_pton(AF_INET, lan_targets[t], &sin.sin_addr) > 0) {
+                                        sendto(udp_sock, wbuf, wn, 0, (struct sockaddr *)&sin, sizeof(sin));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        globfree(&gl);
+    }
+}
+
+static void send_wan_http(const char *local_node, const char *payload) {
+    const char *hosts[] = { "192.168.1.101", "91.139.118.43", NULL };
+    for (int h = 0; hosts[h] != NULL; ++h) {
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) continue;
+
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 200000;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+        struct sockaddr_in srv;
+        memset(&srv, 0, sizeof(srv));
+        srv.sin_family = AF_INET;
+        srv.sin_port = htons(80);
+        inet_pton(AF_INET, hosts[h], &srv.sin_addr);
+
+        if (connect(sock, (struct sockaddr *)&srv, sizeof(srv)) == 0) {
+            char req[4096];
+            int req_len = snprintf(req, sizeof(req),
+                "POST /telemetry.php HTTP/1.1\r\n"
+                "Host: %s\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: %zu\r\n"
+                "Connection: close\r\n\r\n"
+                "%s", hosts[h], strlen(payload), payload);
+            if (req_len > 0 && write(sock, req, (size_t)req_len) > 0) {
+                char resp[16384] = {0};
+                size_t total_r = 0;
+                while (total_r < sizeof(resp) - 1) {
+                    ssize_t r = read(sock, resp + total_r, sizeof(resp) - 1 - total_r);
+                    if (r <= 0) break;
+                    total_r += (size_t)r;
+                }
+                resp[total_r] = '\0';
+                char *body = strstr(resp, "\r\n\r\n");
+                if (body) {
+                    body += 4;
+                    char *first_brace = strchr(body, '{');
+                    if (first_brace) {
+                        const char *known[] = { "t520", "bazina", "boxC", "crostini", "penguin", "android", "phone", NULL };
+                        double now_ts = (double)time(NULL);
+                        for (int k = 0; known[k] != NULL; ++k) {
+                            if (strcmp(known[k], local_node) == 0) continue;
+                            char needle[64];
+                            snprintf(needle, sizeof(needle), "\"%s\":", known[k]);
+                            char *pos = strstr(first_brace, needle);
+                            if (pos) {
+                                char *bstart = strchr(pos, '{');
+                                if (bstart) {
+                                    int depth = 1;
+                                    char *ptr = bstart + 1;
+                                    while (*ptr && depth > 0) {
+                                        if (*ptr == '{') depth++;
+                                        else if (*ptr == '}') depth--;
+                                        ptr++;
+                                    }
+                                    if (depth == 0) {
+                                        size_t olen = (size_t)(ptr - bstart);
+                                        char obuf[4096];
+                                        if (olen < sizeof(obuf)) {
+                                            memcpy(obuf, bstart, olen);
+                                            obuf[olen] = '\0';
+                                            double ts = extract_json_num(obuf, "timestamp");
+                                            if (ts > 0.0 && (now_ts - ts) <= 30.0) {
+                                                update_shm(known[k], obuf);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            close(sock);
+            break;
+        }
+        close(sock);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -416,8 +627,23 @@ int main(int argc, char **argv) {
 
     int udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (udp_sock >= 0) {
-        int broadcast = 1;
-        setsockopt(udp_sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+        int opt = 1;
+        setsockopt(udp_sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
+        setsockopt(udp_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+        setsockopt(udp_sock, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+        int flags = fcntl(udp_sock, F_GETFL, 0);
+        if (flags >= 0) fcntl(udp_sock, F_SETFL, flags | O_NONBLOCK);
+
+        if (!run_once) {
+            struct sockaddr_in baddr;
+            memset(&baddr, 0, sizeof(baddr));
+            baddr.sin_family = AF_INET;
+            baddr.sin_port = htons(BEACON_PORT);
+            baddr.sin_addr.s_addr = INADDR_ANY;
+            bind(udp_sock, (struct sockaddr *)&baddr, sizeof(baddr));
+        }
     }
 
     if (!print_json) {
@@ -463,7 +689,12 @@ int main(int argc, char **argv) {
             mount, disk_free, disk_total,
             gpu_str, temp_c, bat_pct, alert);
 
-        /* 1. Broadcast UDP */
+        /* 1. Drain incoming UDP packets & WAN files */
+        if (!run_once) {
+            drain_udp_and_wan(udp_sock, node);
+        }
+
+        /* 2. Broadcast UDP */
         if (udp_sock >= 0) {
             size_t payload_len = strlen(payload);
             for (int i = 0; TARGETS[i] != NULL; ++i) {
@@ -477,12 +708,12 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* 2. Update local SHM cache */
+        /* 3. Update local SHM cache */
         update_shm(node, payload);
 
-        /* 3. HTTP WAN Fallback */
+        /* 4. HTTP Bridge & Sync */
         if (strcmp(node, "boxC") != 0) {
-            send_wan_http(payload);
+            send_wan_http(node, payload);
         }
 
         if (print_json) {
