@@ -1,2 +1,10 @@
 #!/bin/zsh
-agy --conversation=9860fe31-3526-48d1-9063-3e58e630faf9
+CONV="9860fe31-3526-48d1-9063-3e58e630faf9"
+
+if command -v agy >/dev/null 2>&1; then
+    exec agy --conversation="$CONV" "$@"
+elif [ -x "$HOME/bin/af" ]; then
+    exec "$HOME/bin/af" --conversation="$CONV" "$@"
+else
+    exec ssh -p 2222 -t home "tmux new-session -A -s agy agy --conversation=$CONV $*"
+fi
