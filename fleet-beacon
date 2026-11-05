@@ -156,9 +156,26 @@ def main():
                 except Exception:
                     data = {}
             data[hostname] = payload
+
+            # Merge any WAN telemetry files (< 30s old)
+            try:
+                import glob
+                for wpath in glob.glob("/dev/shm/fleet_wan_*.json"):
+                    if time.time() - os.path.getmtime(wpath) < 30:
+                        with open(wpath, "r") as wf:
+                            wpayload = json.load(wf)
+                            if isinstance(wpayload, dict) and "name" in wpayload:
+                                data[wpayload["name"]] = wpayload
+            except Exception:
+                pass
+
             tmp_path = f"{shm_fleet}.tmp.{os.getpid()}"
             with open(tmp_path, "w") as f:
                 json.dump(data, f)
+            try:
+                os.chmod(tmp_path, 0o666)
+            except Exception:
+                pass
             os.replace(tmp_path, shm_fleet)
         except Exception:
             pass
