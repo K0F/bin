@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import sys
 import os
+import glob
+import shutil
+import socket
 import subprocess
 import urllib.request
 import urllib.parse
@@ -11,32 +14,49 @@ import time
 
 RENDERER_IP = os.environ.get("RENDERER_IP", "192.168.1.107")
 RENDERER_PORT = int(os.environ.get("RENDERER_PORT", "54321"))
-LOCAL_STREAM_PORT = 8201
+ANDROID_IP = os.environ.get("ANDROID_IP", "192.168.1.103")
+ANDROID_SSH_PORT = os.environ.get("ANDROID_SSH_PORT", "8022")
+LOCAL_STREAM_PORT = int(os.environ.get("LOCAL_STREAM_PORT", "8201"))
+
+mimetypes.add_type("application/vnd.apple.mpegurl", ".m3u8")
+mimetypes.add_type("video/mp2t", ".ts")
+mimetypes.add_type("video/mp4", ".mp4")
+mimetypes.add_type("video/x-matroska", ".mkv")
+
+def is_running_on_android():
+    return os.path.exists("/data/data/com.termux") or os.environ.get("FLEET_NODE") == "android"
+
+def get_hls_dir():
+    if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+        return "/dev/shm/cast_tesla_hls"
+    tmpdir = os.environ.get("TMPDIR", "/tmp")
+    return os.path.join(tmpdir, "cast_tesla_hls")
 
 def get_local_ip(target_ip):
     try:
-        import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect((target_ip, 80))
         ip = s.getsockname()[0]
         s.close()
         return ip
     except Exception:
-        return "192.168.1.100"
+        return "192.168.1.103" if is_running_on_android() else "192.168.1.100"
 
 LOCAL_IP = get_local_ip(RENDERER_IP)
 CONTROL_URL = f"http://{RENDERER_IP}:{RENDERER_PORT}/_urn:schemas-upnp-org:service:AVTransport_control"
 
-def is_renderer_online(ip, port):
+def is_tcp_open(ip, port, timeout=1.5):
     try:
-        import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1.5)
-        res = s.connect_ex((ip, port))
+        s.settimeout(timeout)
+        res = s.connect_ex((ip, int(port)))
         s.close()
         return res == 0
     except Exception:
         return False
+
+def is_renderer_online(ip, port):
+    return is_tcp_open(ip, port, timeout=1.5)
 
 def send_soap(action, body_xml):
     if not is_renderer_online(RENDERER_IP, RENDERER_PORT):
@@ -64,13 +84,13 @@ def send_soap(action, body_xml):
         return None
 
 def cast_url(url):
-    print(f"Casting to TESLA TE-300 ({RENDERER_IP})...")
+    print(f"Casting to TESLA TE-300 ({RENDERER_IP}:{RENDERER_PORT})...")
     print(f"Media URL: {url}")
     set_xml = f"<InstanceID>0</InstanceID><CurrentURI>{url}</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>"
     send_soap("SetAVTransportURI", set_xml)
     play_xml = "<InstanceID>0</InstanceID><Speed>1</Speed>"
     send_soap("Play", play_xml)
-    print("Playback started on TV!")
+    print("Playback command dispatched to TV!")
 
 def stop():
     print("Stopping playback on TESLA TE-300...")
@@ -83,6 +103,12 @@ def pause():
     print("Paused.")
 
 def status():
+    online = is_renderer_online(RENDERER_IP, RENDERER_PORT)
+    print(f"Renderer: {RENDERER_IP}:{RENDERER_PORT} ({'ONLINE' if online else 'OFFLINE - enable DLNA DMR on TV'})")
+    print(f"Local IP: {LOCAL_IP}:{LOCAL_STREAM_PORT}")
+    if is_running_on_android():
+        newest = find_latest_android_recording()
+        print(f"Latest Android Screen Recording: {newest or 'none'}")
     xml = send_soap("GetTransportInfo", "<InstanceID>0</InstanceID>")
     if xml:
         import xml.etree.ElementTree as ET
@@ -92,6 +118,7 @@ def status():
 
 class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
     target_file = None
+    target_dir = None
 
     def do_HEAD(self):
         self.send_headers(head_only=True)
@@ -99,44 +126,59 @@ class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_headers(head_only=False)
 
+    def resolve_path(self):
+        if self.target_dir:
+            req_path = urllib.parse.unquote(self.path.split("?", 1)[0]).lstrip("/")
+            if not req_path:
+                req_path = "stream.m3u8"
+            candidate = os.path.abspath(os.path.join(self.target_dir, req_path))
+            if candidate.startswith(os.path.abspath(self.target_dir)) and os.path.isfile(candidate):
+                return candidate
+            return None
+        return self.target_file
+
     def send_headers(self, head_only=False):
-        if not self.target_file or not os.path.exists(self.target_file):
+        filepath = self.resolve_path()
+        if not filepath or not os.path.exists(filepath):
             self.send_error(404, "File Not Found")
             return
 
-        file_size = os.path.getsize(self.target_file)
+        file_size = os.path.getsize(filepath)
         range_header = self.headers.get("Range")
 
         start = 0
-        end = file_size - 1
+        end = max(0, file_size - 1)
 
-        if range_header:
+        if range_header and file_size > 0:
             try:
                 bytes_range = range_header.strip().split("=")[1]
                 s, e = bytes_range.split("-")
                 start = int(s) if s else 0
                 end = int(e) if e else file_size - 1
-            except:
+            except Exception:
                 pass
 
-        if range_header:
+        if range_header and file_size > 0:
             self.send_response(206)
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
         else:
             self.send_response(200)
 
-        length = (end - start) + 1
-        mime_type, _ = mimetypes.guess_type(self.target_file)
+        length = (end - start) + 1 if file_size > 0 else 0
+        mime_type, _ = mimetypes.guess_type(filepath)
         if not mime_type:
             mime_type = "video/mp4"
 
         self.send_header("Content-Type", mime_type)
         self.send_header("Content-Length", str(length))
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        if filepath.endswith(".m3u8") or filepath.endswith(".ts"):
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
 
-        if not head_only:
-            with open(self.target_file, "rb") as f:
+        if not head_only and length > 0:
+            with open(filepath, "rb") as f:
                 f.seek(start)
                 remaining = length
                 while remaining > 0:
@@ -150,8 +192,20 @@ class RangeRequestHandler(http.server.BaseHTTPRequestHandler):
                     remaining -= len(chunk)
 
     def log_message(self, format, *args):
-        # Quiet logger
         pass
+
+def start_http_server():
+    class ThreadingServer(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    try:
+        server = ThreadingServer(("0.0.0.0", LOCAL_STREAM_PORT), RangeRequestHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        return server
+    except OSError:
+        return None
 
 def serve_and_cast_local_file(filepath):
     abs_path = os.path.abspath(filepath)
@@ -159,21 +213,9 @@ def serve_and_cast_local_file(filepath):
         print(f"File not found: {abs_path}")
         sys.exit(1)
 
+    RangeRequestHandler.target_dir = None
     RangeRequestHandler.target_file = abs_path
-    
-    # Run the streaming HTTP server daemon in background
-    class ThreadingServer(http.server.ThreadingHTTPServer):
-        daemon_threads = True
-
-    try:
-        server = ThreadingServer(("0.0.0.0", LOCAL_STREAM_PORT), RangeRequestHandler)
-    except OSError:
-        # Port already open, assume existing server is ready
-        server = None
-
-    if server:
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
+    server = start_http_server()
 
     stream_url = f"http://{LOCAL_IP}:{LOCAL_STREAM_PORT}/{urllib.parse.quote(os.path.basename(abs_path))}"
     cast_url(stream_url)
@@ -187,17 +229,289 @@ def serve_and_cast_local_file(filepath):
             print("\nStopping...")
             stop()
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: cast-tesla <file | url | stop | pause | status>")
-        print("\nExamples on t520:")
-        print("  cast-tesla /mnt/kof17/video/Video8_02_fix.mp4  (file on boxC)")
-        print("  cast-tesla ~/Downloads/my_video.mp4           (local file on t520)")
-        print("  cast-tesla https://ocko-live.ssl.cdn.cra.cz/channels/ocko/playlist.m3u8")
-        print("  cast-tesla http://10.0.0.14:9000/radio.mp3")
-        print("  cast-tesla status")
-        print("  cast-tesla stop")
+def prepare_hls_dir():
+    hls_dir = get_hls_dir()
+    if os.path.exists(hls_dir):
+        shutil.rmtree(hls_dir, ignore_errors=True)
+    os.makedirs(hls_dir, exist_ok=True)
+    return hls_dir
+
+def find_latest_android_recording():
+    search_dirs = [
+        "/sdcard/DCIM/ScreenRecorder",
+        "/sdcard/Movies",
+        "/sdcard/DCIM/Camera",
+        os.path.expanduser("~/DCIM/ScreenRecorder"),
+    ]
+    candidates = []
+    for d in search_dirs:
+        if os.path.isdir(d):
+            for ext in ("*.mp4", "*.mkv", "*.ts", "*.webm"):
+                candidates.extend(glob.glob(os.path.join(d, ext)))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return candidates[0]
+
+def detect_adb_target(explicit_target=None):
+    if not shutil.which("adb"):
+        return None
+    if explicit_target:
+        host = explicit_target.split(":")[0]
+        port = int(explicit_target.split(":")[1]) if ":" in explicit_target else 5555
+        if is_tcp_open(host, port):
+            subprocess.run(["adb", "connect", f"{host}:{port}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return f"{host}:{port}"
+    # Check already connected USB/TCP devices
+    try:
+        out = subprocess.check_output(["adb", "devices"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "device":
+                return parts[0]
+    except Exception:
+        pass
+    # Probe default TCP 5555 target
+    default_host = "127.0.0.1" if is_running_on_android() else ANDROID_IP
+    if is_tcp_open(default_host, 5555):
+        target = f"{default_host}:5555"
+        subprocess.run(["adb", "connect", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return target
+    return None
+
+def cast_android_live(explicit_target=None):
+    adb_target = detect_adb_target(explicit_target)
+    if not adb_target:
+        return False
+
+    hls_dir = prepare_hls_dir()
+    m3u8_path = os.path.join(hls_dir, "stream.m3u8")
+
+    print(f"[android-cast] Starting live zero-copy H.264 capture from ADB ({adb_target})...")
+    adb_cmd = [
+        "adb", "-s", adb_target, "exec-out",
+        "screenrecord", "--bit-rate", "4000000", "--size", "1280x720", "--output-format=h264", "-"
+    ]
+    ffmpeg_cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "-fflags", "nobuffer", "-flags", "low_delay",
+        "-f", "h264", "-i", "pipe:0",
+        "-c:v", "copy",
+        "-f", "hls", "-hls_time", "1", "-hls_list_size", "4",
+        "-hls_flags", "delete_segments+append_list+omit_endlist",
+        m3u8_path
+    ]
+
+    p_adb = subprocess.Popen(adb_cmd, stdout=subprocess.PIPE)
+    p_ff = subprocess.Popen(ffmpeg_cmd, stdin=p_adb.stdout)
+
+    RangeRequestHandler.target_file = None
+    RangeRequestHandler.target_dir = hls_dir
+    start_http_server()
+
+    print("[android-cast] Waiting for initial HLS segment...")
+    for _ in range(60):
+        if os.path.exists(m3u8_path) and os.path.getsize(m3u8_path) > 0:
+            break
+        if p_ff.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    if not os.path.exists(m3u8_path):
+        print("[android-cast] Live ADB screenrecord did not produce H.264 frames.")
+        p_ff.terminate()
+        p_adb.terminate()
+        return False
+
+    stream_url = f"http://{LOCAL_IP}:{LOCAL_STREAM_PORT}/stream.m3u8"
+    cast_url(stream_url)
+    print("[android-cast] Live Android screen streaming active! Press Ctrl+C to stop.")
+    try:
+        while p_ff.poll() is None:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[android-cast] Stopping live screencast...")
+    finally:
+        p_ff.terminate()
+        p_adb.terminate()
+        stop()
+    return True
+
+def cast_android_latest():
+    if not is_running_on_android():
+        print(f"[android-cast] Delegating to android ({ANDROID_IP}:{ANDROID_SSH_PORT})...")
+        subprocess.run([
+            "ssh", "-t", "-p", ANDROID_SSH_PORT, ANDROID_IP,
+            f"RENDERER_IP={RENDERER_IP} RENDERER_PORT={RENDERER_PORT} ~/bin/android-cast latest"
+        ])
+        return
+
+    latest = find_latest_android_recording()
+    if not latest:
+        print("[android-cast] No screen recordings found in /sdcard/DCIM/ScreenRecorder.")
         sys.exit(1)
+
+    print(f"[android-cast] Casting latest Android screen recording: {latest}")
+    serve_and_cast_local_file(latest)
+
+def cast_android_watch():
+    if not is_running_on_android():
+        print(f"[android-cast] Delegating watch mode to android ({ANDROID_IP}:{ANDROID_SSH_PORT})...")
+        subprocess.run([
+            "ssh", "-t", "-p", ANDROID_SSH_PORT, ANDROID_IP,
+            f"RENDERER_IP={RENDERER_IP} RENDERER_PORT={RENDERER_PORT} ~/bin/android-cast watch"
+        ])
+        return
+
+    rec_dir = "/sdcard/DCIM/ScreenRecorder"
+    print(f"[android-cast] Watching {rec_dir} for new screen recordings...")
+    print("[android-cast] Start & stop MIUI Screen Recorder on your phone to auto-cast to TESLA TE-300.")
+    seen = set(glob.glob(os.path.join(rec_dir, "*.mp4")))
+    RangeRequestHandler.target_dir = None
+    server = start_http_server()
+    try:
+        while True:
+            current = set(glob.glob(os.path.join(rec_dir, "*.mp4")))
+            new_files = sorted(current - seen, key=lambda p: os.path.getmtime(p))
+            for fpath in new_files:
+                # Wait until file size stabilizes (recording finished flushing)
+                prev_size = -1
+                while True:
+                    try:
+                        curr_size = os.path.getsize(fpath)
+                    except OSError:
+                        curr_size = -1
+                    if curr_size > 0 and curr_size == prev_size:
+                        break
+                    prev_size = curr_size
+                    time.sleep(1.0)
+                print(f"\n[android-cast] New screen recording ready: {fpath}")
+                RangeRequestHandler.target_file = os.path.abspath(fpath)
+                stream_url = f"http://{LOCAL_IP}:{LOCAL_STREAM_PORT}/{urllib.parse.quote(os.path.basename(fpath))}"
+                cast_url(stream_url)
+            seen = current
+            time.sleep(1.5)
+    except KeyboardInterrupt:
+        print("\n[android-cast] Stopping watch mode...")
+        if server:
+            stop()
+
+def cast_android(subarg=None):
+    if subarg == "latest":
+        cast_android_latest()
+        return
+    if subarg == "watch":
+        cast_android_watch()
+        return
+    if subarg == "live":
+        if not cast_android_live():
+            print("[android-cast] Error: ADB TCP port 5555 is not active on Android.")
+            print("[android-cast] Enable Wireless Debugging or run 'adb tcpip 5555' over USB once, or use 'android-cast latest'.")
+            sys.exit(1)
+        return
+
+    # Auto mode: try live ADB first; if unavailable, fall back to latest recording
+    if cast_android_live(subarg):
+        return
+    print("[android-cast] Note: Live ADB (port 5555) is currently inactive; falling back to latest Android screen recording.")
+    print("[android-cast] (Tip: use 'android-cast watch' to auto-cast new MIUI screen recordings, or enable Wireless Debugging for live HLS)")
+    cast_android_latest()
+
+def cast_desktop(display=None):
+    disp = display or os.environ.get("DISPLAY", ":0.0")
+    hls_dir = prepare_hls_dir()
+    m3u8_path = os.path.join(hls_dir, "stream.m3u8")
+
+    print(f"[cast-tesla] Capturing live X11 desktop ({disp}) -> HLS ({m3u8_path})...")
+    ffmpeg_cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "-f", "x11grab", "-framerate", "25", "-i", disp,
+        "-vf", "scale=1280:720",
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+        "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-g", "25",
+        "-f", "hls", "-hls_time", "1", "-hls_list_size", "4",
+        "-hls_flags", "delete_segments+append_list+omit_endlist",
+        m3u8_path
+    ]
+    p_ff = subprocess.Popen(ffmpeg_cmd)
+    RangeRequestHandler.target_file = None
+    RangeRequestHandler.target_dir = hls_dir
+    start_http_server()
+
+    for _ in range(60):
+        if os.path.exists(m3u8_path) and os.path.getsize(m3u8_path) > 0:
+            break
+        if p_ff.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    stream_url = f"http://{LOCAL_IP}:{LOCAL_STREAM_PORT}/stream.m3u8"
+    cast_url(stream_url)
+    print("[cast-tesla] Live desktop streaming active! Press Ctrl+C to stop.")
+    try:
+        while p_ff.poll() is None:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nStopping desktop stream...")
+    finally:
+        p_ff.terminate()
+        stop()
+
+def print_help(prog):
+    if prog == "android-cast":
+        print("Usage: android-cast [live | latest | watch | <file> | <url> | status | stop | pause]")
+        print("\nModes:")
+        print("  android-cast              Auto: live ADB H.264->HLS stream if ADB is active, else latest ScreenRecorder MP4")
+        print("  android-cast live [ip]    Live zero-copy ADB screenrecord -> HLS -> TESLA TE-300")
+        print("  android-cast latest       Cast newest /sdcard/DCIM/ScreenRecorder/*.mp4 from Android to TESLA TE-300")
+        print("  android-cast watch        Watch /sdcard/DCIM/ScreenRecorder and auto-cast new recordings when finished")
+        print("  android-cast <file|url>   Cast specific file or HTTP/HLS stream URL to TESLA TE-300")
+        print("  android-cast status       Show TESLA TE-300 DLNA DMR status and latest Android recording")
+        print("  android-cast stop         Stop playback on TESLA TE-300")
+    else:
+        print(f"Usage: {prog} <file | url | android [live|latest|watch] | desktop | stop | pause | status>")
+        print("\nExamples:")
+        print(f"  {prog} android                                  (Cast Android screencast to TESLA TE-300)")
+        print(f"  {prog} android watch                            (Auto-cast new Android screen recordings)")
+        print(f"  {prog} desktop                                  (Live X11 desktop -> HLS -> TESLA TE-300)")
+        print(f"  {prog} /mnt/kof17/video/Video8_02_fix.mp4       (File on boxC)")
+        print(f"  {prog} ~/Downloads/my_video.mp4                 (Local file)")
+        print(f"  {prog} https://ocko-live.ssl.cdn.cra.cz/channels/ocko/playlist.m3u8")
+        print(f"  {prog} status")
+        print(f"  {prog} stop")
+
+def main():
+    prog = os.path.basename(sys.argv[0])
+
+    if prog == "android-cast":
+        if len(sys.argv) < 2:
+            cast_android(None)
+            return
+        arg = sys.argv[1]
+        if arg in ("-h", "--help", "help"):
+            print_help(prog)
+            return
+        if arg in ("live", "latest", "watch"):
+            sub = sys.argv[2] if (arg == "live" and len(sys.argv) > 2) else arg
+            if arg == "live" and len(sys.argv) > 2:
+                cast_android_live(sys.argv[2])
+            else:
+                cast_android(arg)
+            return
+        if arg == "stop":
+            stop()
+            return
+        if arg == "pause":
+            pause()
+            return
+        if arg == "status":
+            status()
+            return
+        # Otherwise fall through to general file/url handling
+
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print_help(prog)
+        sys.exit(0 if len(sys.argv) >= 2 else 1)
 
     arg = sys.argv[1]
 
@@ -205,8 +519,14 @@ def main():
         stop()
     elif arg == "pause":
         pause()
-    elif cmd_status := (arg == "status"):
+    elif arg == "status":
         status()
+    elif arg == "android":
+        sub = sys.argv[2] if len(sys.argv) > 2 else None
+        cast_android(sub)
+    elif arg in ("desktop", "screen"):
+        disp = sys.argv[2] if len(sys.argv) > 2 else None
+        cast_desktop(disp)
     elif arg.startswith("http://") or arg.startswith("https://"):
         cast_url(arg)
     elif arg.startswith("/mnt/kof17") or arg.startswith("boxC:"):
@@ -216,7 +536,6 @@ def main():
     elif os.path.exists(arg):
         serve_and_cast_local_file(arg)
     else:
-        # Check if it exists on boxC
         res = subprocess.run(["ssh", "boxC", f"test -e '{arg}'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if res.returncode == 0:
             print(f"File found on boxC: {arg}")
