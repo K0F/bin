@@ -1,0 +1,17 @@
+# ~/bin/bin-env — Architecture-Aware Fleet Path Setup
+# Sourced in ~/.bashrc and ~/.zshrc across t520, bazina, boxC, penguin, phone
+
+_ARCH="$(uname -m)"
+if [ -d "$HOME/bin/arch/$_ARCH" ]; then
+    case ":$PATH:" in
+        *":$HOME/bin/arch/$_ARCH:"*) ;;
+        *) export PATH="$HOME/bin/arch/$_ARCH:$PATH" ;;
+    esac
+fi
+
+case ":$PATH:" in
+    *":$HOME/bin:"*) ;;
+    *) export PATH="$HOME/bin:$PATH" ;;
+esac
+
+unset _ARCH

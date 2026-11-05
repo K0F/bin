@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ~/bin/arch-dispatcher — Universal Architecture Binary Runner
+# Dispatches commands to ~/bin/arch/$(uname -m)/<cmd>
+# =============================================================================
+CMD="$(basename "$0")"
+ARCH="$(uname -m)"
+TARGET="$HOME/bin/arch/$ARCH/$CMD"
+
+if [ -x "$TARGET" ]; then
+    exec "$TARGET" "$@"
+fi
+
+echo "Error: '$CMD' is not available for architecture '$ARCH' in ~/bin/arch/$ARCH/" >&2
+exit 127
