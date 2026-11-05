@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""
+FLEET CANVAS STITCHER & PHYSICAL MONITOR MATRIX
+Captures screens across the fleet (t520, bazina, boxC, penguin, android),
+stitches them according to the physical table/monitor canvas,
+aggregates context from ~/src/dnes, and saves into ~/.agents across fleet.
+"""
+
+import os
+import sys
+import json
+import glob
+import re
+import subprocess
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+HOME = os.path.expanduser("~")
+AGENTS_DIR = os.path.join(HOME, ".agents")
+SRC_AGENTS_DIR = os.path.join(HOME, "src", ".agents")
+os.makedirs(AGENTS_DIR, exist_ok=True)
+os.makedirs(SRC_AGENTS_DIR, exist_ok=True)
+
+# 1. Capture Screenshots
+def capture_fleet_screenshots():
+    print("[*] Capturing screenshots across fleet nodes...")
+    
+    # t520 local
+    t520_path = "/tmp/scrot_t520.png"
+    try:
+        subprocess.run(["scrot", "-z", "-o", t520_path], check=True, env=dict(os.environ, DISPLAY=":0"))
+        print(f"  [✓] t520: captured ({t520_path})")
+    except Exception as e:
+        print(f"  [-] t520 scrot error: {e}")
+
+    # bazina remote
+    bazina_path = "/tmp/scrot_bazina.png"
+    try:
+        cmd = 'DISPLAY=:0 scrot -z -o /tmp/scrot_bazina.png 2>/dev/null || DISPLAY=:0 XAUTHORITY=/home/kof/.Xauthority scrot -z -o /tmp/scrot_bazina.png'
+        subprocess.run(["ssh", "-o", "ConnectTimeout=3", "bazina", cmd], check=True, timeout=5)
+        subprocess.run(["scp", "-o", "ConnectTimeout=3", "bazina:/tmp/scrot_bazina.png", bazina_path], check=True, timeout=5)
+        print(f"  [✓] bazina: captured and transferred ({bazina_path})")
+    except Exception as e:
+        print(f"  [-] bazina scrot error: {e}")
+
+    # boxC remote
+    boxc_path = "/tmp/scrot_boxc.png"
+    try:
+        cmd = 'DISPLAY=:0 scrot -z -o /tmp/scrot_boxc.png 2>/dev/null || sudo -u root DISPLAY=:0 scrot -z -o /tmp/scrot_boxc.png'
+        subprocess.run(["ssh", "-o", "ConnectTimeout=3", "boxC", cmd], check=True, timeout=5)
+        subprocess.run(["scp", "-o", "ConnectTimeout=3", "boxC:/tmp/scrot_boxc.png", boxc_path], check=True, timeout=5)
+        print(f"  [✓] boxC: captured and transferred ({boxc_path})")
+    except Exception as e:
+        print(f"  [-] boxC scrot error: {e}")
+
+    return {
+        "t520": t520_path if os.path.exists(t520_path) else None,
+        "bazina": bazina_path if os.path.exists(bazina_path) else None,
+        "boxC": boxc_path if os.path.exists(boxc_path) else None
+    }
+
+# 2. Harvest Context from ~/src/dnes
+def harvest_dnes_context():
+    journal_path = os.path.join(HOME, "src", "dnes", "journal.md")
+    milestones = []
+    if os.path.exists(journal_path):
+        with open(journal_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("- ["):
+                    milestones.append(line)
+    
+    # Moonphase
+    moon_summary = "🌘 Ubývající srpek (15.4% osvětlení)"
+    try:
+        res = subprocess.run(["python3", "-c", "import sys; sys.path.insert(0, os.path.expanduser('~/bin')); import moonphase; print(moonphase.get_moon_metrics().get('summary'))"], capture_output=True, text=True)
+        if res.stdout.strip():
+            moon_summary = res.stdout.strip()
+    except Exception:
+        pass
+
+    return {
+        "recent_milestones": milestones[-8:] if milestones else [],
+        "moon_summary": moon_summary,
+        "time_str": datetime.now().strftime("%Y-%m-%d %H:%M:%S CET")
+    }
+
+# 3. Create Placeholder Screen Card
+def create_placeholder_card(title, width, height, ip, details):
+    img = Image.new("RGB", (width, height), (18, 22, 28))
+    draw = ImageDraw.Draw(img)
+    
+    # Grid lines
+    for x in range(0, width, 40):
+        draw.line([(x, 0), (x, height)], fill=(28, 34, 44), width=1)
+    for y in range(0, height, 40):
+        draw.line([(0, y), (width, y)], fill=(28, 34, 44), width=1)
+
+    # Frame border
+    draw.rectangle([(2, 2), (width - 3, height - 3)], outline=(60, 80, 110), width=2)
+
+    # Title bar
+    draw.rectangle([(2, 2), (width - 3, 34)], fill=(32, 45, 62))
+    draw.text((12, 8), title, fill=(220, 235, 255))
+    draw.text((width - 140, 8), ip, fill=(120, 190, 255))
+
+    # Center terminal box
+    tw, th = int(width * 0.85), int(height * 0.65)
+    tx, ty = (width - tw) // 2, (height - th) // 2 + 10
+    draw.rectangle([(tx, ty), (tx + tw, ty + th)], fill=(10, 12, 16), outline=(45, 60, 80), width=2)
+    
+    # Text inside terminal
+    y_text = ty + 18
+    draw.text((tx + 20, y_text), f"$ fleet-node-telemetry --node={title.split()[0].lower()}", fill=(120, 255, 120))
+    y_text += 26
+    for line in details:
+        draw.text((tx + 20, y_text), line, fill=(180, 200, 220))
+        y_text += 22
+
+    # Status indicator
+    draw.ellipse([(tx + tw - 24, ty + 12), (tx + tw - 12, ty + 24)], fill=(0, 230, 120))
+    return img
+
+# 4. Render Physical Canvas
+def render_canvas(screens, ctx):
+    print("[*] Composing physical display canvas matrix...")
+    
+    # Canvas dimensions
+    CANVAS_W = 4920
+    CANVAS_H = 2280
+    BG_COLOR = (20, 24, 30)
+    GRID_COLOR = (30, 36, 46)
+    
+    canvas = Image.new("RGB", (CANVAS_W, CANVAS_H), BG_COLOR)
+    draw = ImageDraw.Draw(canvas)
+    
+    # Draw desk blueprint grid
+    for x in range(0, CANVAS_W, 60):
+        draw.line([(x, 0), (x, CANVAS_H)], fill=GRID_COLOR, width=1)
+    for y in range(0, CANVAS_H, 60):
+        draw.line([(0, y), (CANVAS_W, y)], fill=GRID_COLOR, width=1)
+
+    # Header Bar
+    draw.rectangle([(0, 0), (CANVAS_W, 110)], fill=(12, 15, 20), outline=(40, 50, 65), width=2)
+    draw.text((36, 20), "THE OBSERVATOŘ FLEET // PHYSICAL DISPLAY CANVAS MATRIX", fill=(255, 255, 255))
+    draw.text((36, 54), f"SYNERGY KVM 5-NODE MULTI-HEAD MESH ⨂ {ctx['time_str']} ⨂ {ctx['moon_summary']}", fill=(121, 172, 228)) # FCZ blue #79ACE4
+    draw.text((36, 80), "PTP GRANDMASTER (Intel 82579LM ±6ns) ⨂ 50.000 Hz EU GRID TELEMETRY ⨂ ARCHER VR400 192.168.1.0/24", fill=(160, 175, 195))
+
+    # Top right badges
+    draw.rectangle([(CANVAS_W - 540, 20), (CANVAS_W - 36, 90)], fill=(18, 24, 34), outline=(70, 90, 120), width=1)
+    draw.text((CANVAS_W - 520, 32), "FLEET NETWORK HIERARCHY:", fill=(255, 220, 100))
+    draw.text((CANVAS_W - 520, 52), "L1: LAN 192.168.1.0/24 (Gigabit + WiFi)", fill=(200, 220, 240))
+    draw.text((CANVAS_W - 520, 70), "L2: WireGuard 10.39.9.0/24 · L3: OpenVPN", fill=(140, 180, 220))
+
+    # Monitor Bezel & Stand helper
+    def paste_monitor(img, x, y, title, badge, is_server=False):
+        mw, mh = img.size
+        bw = 14 # Bezel thickness
+        # Bezel frame
+        bezel_x1, bezel_y1 = x - bw, y - bw - 28
+        bezel_x2, bezel_y2 = x + mw + bw, y + mh + bw + 14
+        
+        # Outer shadow
+        draw.rectangle([(bezel_x1 + 6, bezel_y1 + 6), (bezel_x2 + 6, bezel_y2 + 6)], fill=(10, 12, 16))
+        # Bezel body
+        bezel_color = (35, 42, 52) if not is_server else (45, 56, 70)
+        draw.rectangle([(bezel_x1, bezel_y1), (bezel_x2, bezel_y2)], fill=bezel_color, outline=(70, 85, 105), width=2)
+        
+        # Title bar on bezel
+        draw.text((bezel_x1 + 14, bezel_y1 + 6), title, fill=(255, 255, 255))
+        draw.text((bezel_x2 - len(badge)*8 - 14, bezel_y1 + 6), badge, fill=(120, 220, 160) if not is_server else (255, 200, 80))
+        
+        # Power LED
+        draw.ellipse([(bezel_x2 - 18, bezel_y2 - 12), (bezel_x2 - 8, bezel_y2 - 2)], fill=(0, 255, 130))
+
+        # Paste actual screen
+        canvas.paste(img, (x, y))
+
+        # Desk stand
+        sw, sh = 120, 30
+        sx = x + (mw - sw) // 2
+        draw.rectangle([(sx, bezel_y2), (sx + sw, bezel_y2 + 10)], fill=(50, 60, 75))
+        draw.rectangle([(sx - 30, bezel_y2 + 10), (sx + sw + 30, bezel_y2 + 18)], fill=(30, 36, 45), outline=(60, 75, 95), width=1)
+
+    # 1. BAZINA (Left-Top)
+    bazina_img = None
+    if screens.get("bazina") and os.path.exists(screens["bazina"]):
+        bazina_img = Image.open(screens["bazina"]).convert("RGB")
+    else:
+        bazina_img = create_placeholder_card("BAZINA [LEFT-TOP]", 1920, 1080, "192.168.1.104", [
+            "OS: Debian GNU/Linux 13 (Trixie)",
+            "CPU: AMD Ryzen 5 3600 (6c/12t) @ 4.2 GHz",
+            "GPU: AMD Radeon RX 5600/5700 XT (Navi 10)",
+            "Audio: ASUS VX248 HDMI (WirePlumber p1500)",
+            "NBD Swap Server: 8GB tmpfs ramdisk -> t520",
+            "Print/Scan: Brother DCP-J4120DW (CUPS 600 DPI)",
+            "Storage: /mnt/ssd (1TB NVMe), /mnt/seagate (1TB)"
+        ])
+    paste_monitor(bazina_img, 60, 160, "BAZINA (LEFT-TOP) // AMD RYZEN + RX 5700 XT", "192.168.1.104 [1920x1080]")
+
+    # 2. PENGUIN (Left-Bottom)
+    penguin_img = create_placeholder_card("PENGUIN [LEFT-BOTTOM]", 1366, 768, "192.168.1.105", [
+        "Hardware: Chromebook Field Node",
+        "Identity: crostini [x86_64 Debian container]",
+        "Role: Mobile field terminal & documentation",
+        "Synergy KVM: Client connected (bottom-left)",
+        "NTP: Synchronized to t520 Stratum 1 Grandmaster",
+        "Network: 192.168.1.105 (WiFi) / 10.39.9.105 (WG)",
+        "Physical placement: Left of t520 under bazina"
+    ])
+    paste_monitor(penguin_img, 60, 1340, "PENGUIN (LEFT-BOTTOM) // CHROMEBOOK FIELD NODE", "192.168.1.105 [1366x768]")
+
+    # 3. ANDROID (Under table left)
+    android_img = create_placeholder_card("ANDROID [PHONE]", 470, 768, "192.168.1.103", [
+        "Device: Xiaomi 22101316G",
+        "OS: Android 14 / Termux aarch64",
+        "Port: 8022 (u0_a322)",
+        "Sensors: OSC 9000/8000 -> bazina",
+        "Sync: Syncthing phone-DCIM",
+        "Status: Pod stolem vlevo"
+    ])
+    paste_monitor(android_img, 60 + 1366 + 84, 1340, "ANDROID // TERMUX aarch64", "192.168.1.103:8022")
+
+    # 4. T520 (Center KVM Server)
+    t520_img = None
+    if screens.get("t520") and os.path.exists(screens["t520"]):
+        t520_img = Image.open(screens["t520"]).convert("RGB")
+    else:
+        t520_img = create_placeholder_card("T520 [CENTER / SERVER]", 1600, 900, "192.168.1.100", [
+            "Hardware: ThinkPad t520 (Intel i5-2520M)",
+            "OS: Arch Linux x86_64",
+            "Role: Synergy KVM Server (Port 24800)",
+            "IEEE 1588 PTP Grandmaster: Intel 82579LM (/dev/ptp0)",
+            "SDR Heat Scanner: RTL-SDR 868.95 MHz Wireless M-Bus",
+            "Memory: 8GB zram0 (zstd) + 8GB NBD RAM swap bazina",
+            "Power/ACPI: S3 freeze disabled, lid mute hook active"
+        ])
+    paste_monitor(t520_img, 2060, 480, "T520 (CENTER SERVER / GRANDMASTER) // THINKPAD T520", "192.168.1.100 [1600x900]", is_server=True)
+
+    # 5. BOXC (Right Node)
+    boxc_img = None
+    if screens.get("boxC") and os.path.exists(screens["boxC"]):
+        boxc_img = Image.open(screens["boxC"]).convert("RGB")
+    else:
+        boxc_img = create_placeholder_card("BOXC [RIGHT]", 1024, 768, "192.168.1.101", [
+            "Hardware: Raspberry Pi 4 Model B (4GB RAM)",
+            "OS: Debian GNU/Linux 12 (Bookworm aarch64)",
+            "Display: PiJockey HDMI CRTC scanout (1024x768)",
+            "VPN Host: WireGuard 10.39.9.1 / OpenVPN 10.39.10.1",
+            "Storage: /mnt/kof17 (916GB USB disk NFS/SMB)",
+            "Web: pešek.com / Konzdat publishing origin"
+        ])
+    paste_monitor(boxc_img, 3760, 546, "BOXC (RIGHT) // RASPBERRY PI 4 VPN & STORAGE", "192.168.1.101 [1024x768]")
+
+    # Traversal Vectors (Synergy KVM Traversal Lines)
+    arrow_color = (255, 190, 40) # Bright Amber
+    
+    # t520 <---> boxC
+    draw.line([(2060 + 1600 + 14, 480 + 450), (3760 - 14, 546 + 384)], fill=arrow_color, width=3)
+    draw.text((3700 - 80, 500), "<=== Synergy KVM ===>", fill=arrow_color)
+
+    # t520 <---> penguin
+    draw.line([(2060 - 14, 480 + 450), (60 + 1366 + 14, 1340 + 200)], fill=arrow_color, width=3)
+    draw.text((1520, 880), "<=== Synergy KVM ===>", fill=arrow_color)
+
+    # t520 <---> bazina
+    draw.line([(2060 + 400, 480 - 14), (60 + 1600, 160 + 1080 + 14)], fill=arrow_color, width=3)
+    draw.text((1700, 300), "<=== Synergy KVM ===>", fill=arrow_color)
+
+    # bazina <---> penguin
+    draw.line([(60 + 600, 160 + 1080 + 14), (60 + 600, 1340 - 14)], fill=arrow_color, width=3)
+    draw.text((60 + 620, 1260), "KVM <^>", fill=arrow_color)
+
+    # bazina <---> boxC
+    draw.line([(60 + 1920 + 14, 160 + 300), (3760 - 14, 546 + 200)], fill=(100, 180, 255), width=2)
+    draw.text((2900, 220), "<-- NFSv4 Gigabit Link (/mnt/ssd, /mnt/kof17) -->", fill=(100, 180, 255))
+
+    # Bottom Context Footer Bar (Aggregated from ~/src/dnes)
+    draw.rectangle([(0, CANVAS_H - 130), (CANVAS_W, CANVAS_H)], fill=(12, 15, 20), outline=(40, 50, 65), width=2)
+    draw.text((36, CANVAS_H - 118), "POSLEDNÍ ZÁPISY A MILNÍKY Z REPOZITÁŘE DNES (JOURNAL.MD):", fill=(255, 220, 80))
+    
+    col1_x = 36
+    col2_x = CANVAS_W // 2
+    for i, m in enumerate(ctx["recent_milestones"][:6]):
+        target_x = col1_x if i < 3 else col2_x
+        target_y = CANVAS_H - 92 + (i % 3) * 26
+        # clean milestone text
+        clean_m = m if len(m) < 140 else m[:137] + "..."
+        draw.text((target_x, target_y), clean_m, fill=(200, 215, 235))
+
+    # Save files
+    out_png = os.path.join(AGENTS_DIR, "fleet_canvas.png")
+    out_jpg = os.path.join(AGENTS_DIR, "fleet_canvas.jpg")
+    out_md = os.path.join(AGENTS_DIR, "fleet_canvas.md")
+
+    print(f"[*] Saving master canvas to {out_png}...")
+    canvas.save(out_png, "PNG", optimize=True)
+
+    # Also save 0.5x preview JPEG for small-web viewing
+    print(f"[*] Saving preview JPEG to {out_jpg}...")
+    preview = canvas.resize((CANVAS_W // 2, CANVAS_H // 2), Image.Resampling.LANCZOS)
+    preview.save(out_jpg, "JPEG", quality=88)
+
+    # Write Markdown documentation
+    with open(out_md, "w", encoding="utf-8") as f:
+        f.write(f"""# The Observatoř Fleet // Physical Display Canvas Matrix
+
+Vygenerováno: {ctx['time_str']}
+Lunární fáze: {ctx['moon_summary']}
+
+![Fleet Physical Canvas]({out_png})
+
+## Topologie fyzického plátna obrazovek a KVM (Synergy)
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║  [LEVÝ HORNÍ] BAZINA               │ [STŘED / KVM SERVER] T520               │ [PRAVÝ] BOXC           ║
+║  192.168.1.104 · 1920x1080         │ 192.168.1.100 · 1600x900                │ 192.168.1.101 · 1024x768║
+║  Debian 13 · Ryzen · RX 5700 XT    │ Arch Linux · ThinkPad · Intel HD 3000   │ Pi 4 · PiJockey HDMI   ║
+║────────────────────────────────────┴─────────────────────────────────────────┴────────────────────────║
+║  [LEVÝ DOLNÍ] PENGUIN              │ [POD STOLEM VLEVO] ANDROID                                       ║
+║  192.168.1.105 · 1366x768          │ 192.168.1.103:8022 · Termux aarch64                              ║
+║  Crostini Chromebook x86_64        │ Senzorická telemetrie OSC                                        ║
+╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
+```
+
+## Souhrnné parametry zachycení
+- **t520 (Server):** 1600x900, Arch Linux, PTP Grandmaster (±6 ns), SDR 868.95 MHz radiátory
+- **bazina:** 1920x1080, Debian 13 Trixie, NBD 8GB swap server, Brother DCP-J4120DW CUPS
+- **boxC:** 1024x768, Raspberry Pi 4, WireGuard VPN (10.39.9.1), OpenVPN (10.39.10.1), NFS /mnt/kof17
+- **penguin:** 1366x768, Chromebook crostini mobilní terénní stanice
+- **android:** 192.168.1.103:8022, Xiaomi Termux aarch64
+
+## Poslední zaznamenané milníky z repozitáře dnes:
+""")
+        for m in ctx["recent_milestones"]:
+            f.write(f"{m}\n")
+
+    # Synchronize across fleet (.agents directories)
+    print("[*] Synchronizing canvas across fleet nodes...")
+    # Copy to src/.agents
+    subprocess.run(["cp", out_png, out_jpg, out_md, SRC_AGENTS_DIR], check=True)
+    
+    # Copy to bazina:~/.agents/
+    try:
+        subprocess.run(["ssh", "bazina", "mkdir -p ~/.agents"], timeout=3)
+        subprocess.run(["scp", "-q", out_png, out_jpg, out_md, "bazina:~/.agents/"], timeout=8)
+        print("  [✓] bazina: ~/.agents synchronized")
+    except Exception as e:
+        print(f"  [-] bazina sync warning: {e}")
+
+    # Copy to boxC:~/.agents/ and /var/www/html/konzdat/assets/
+    try:
+        subprocess.run(["ssh", "boxC", "mkdir -p ~/.agents /var/www/html/konzdat/assets"], timeout=3)
+        subprocess.run(["scp", "-q", out_png, out_jpg, out_md, "boxC:~/.agents/"], timeout=8)
+        subprocess.run(["scp", "-q", out_png, out_jpg, "boxC:/var/www/html/konzdat/assets/"], timeout=8)
+        subprocess.run(["ssh", "boxC", "ln -sfn /var/www/html/konzdat/assets/fleet_canvas.png /var/www/html/canvas.png"], timeout=3)
+        print("  [✓] boxC: ~/.agents and web http://pešek.com/canvas.png synchronized")
+    except Exception as e:
+        print(f"  [-] boxC sync warning: {e}")
+
+    print(f"[✓] Fleet canvas complete! Master saved to {out_png}")
+    return out_png
+
+def main():
+    screens = capture_fleet_screenshots()
+    ctx = harvest_dnes_context()
+    render_canvas(screens, ctx)
+
+if __name__ == "__main__":
+    main()
