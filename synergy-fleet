@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# synergy-fleet: Manage Synergy KVM across t520 (server), bazina (left), and boxC (right)
+# synergy-fleet: Manage Synergy KVM across t520 (server), bazina (levy_horni), penguin (levy_dolni), and boxC (pravy)
 set -euo pipefail
 
 cmd="${1:-status}"
 
 case "$cmd" in
     start)
-        echo "== Starting Synergy Server on t520 =="
+        echo "== Starting Synergy Server on t520 (Center) =="
         systemctl --user start synergy-server
         sleep 1
 
-        echo "== Starting Synergy Client on bazina (left) =="
+        echo "== Starting Synergy Client on bazina (Left-Top) =="
         ssh -o ConnectTimeout=3 bazina "systemctl --user start synergy-client" 2>/dev/null || echo "Warning: Could not start on bazina"
 
-        echo "== Starting Synergy Client on boxC (right) =="
+        echo "== Starting Synergy Client on boxC (Right) =="
         ssh -o ConnectTimeout=3 boxC "systemctl --user start synergy-client" 2>/dev/null || echo "Warning: Could not start on boxC"
+
+        echo "== Starting Synergy Client on penguin (Left-Bottom) =="
+        ssh -o ConnectTimeout=3 kof@192.168.1.105 "systemctl --user start synergy-client" 2>/dev/null || echo "Notice: penguin is offline / sleep"
 
         echo ""
         "$0" status
@@ -25,6 +28,7 @@ case "$cmd" in
         systemctl --user stop synergy-server 2>/dev/null || true
         ssh -o ConnectTimeout=3 bazina "systemctl --user stop synergy-client" 2>/dev/null || true
         ssh -o ConnectTimeout=3 boxC "systemctl --user stop synergy-client" 2>/dev/null || true
+        ssh -o ConnectTimeout=3 kof@192.168.1.105 "systemctl --user stop synergy-client" 2>/dev/null || true
         echo "All Synergy services stopped."
         ;;
 
@@ -39,8 +43,11 @@ case "$cmd" in
         echo -n "t520 (Server / Center): "
         systemctl --user is-active synergy-server 2>/dev/null || echo "inactive"
 
-        echo -n "bazina (Client / Left): "
+        echo -n "bazina (Client / Left-Top): "
         ssh -o ConnectTimeout=2 bazina "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"
+
+        echo -n "penguin (Client / Left-Bottom): "
+        ssh -o ConnectTimeout=2 kof@192.168.1.105 "systemctl --user is-active synergy-client 2>/dev/null" || echo "offline"
 
         echo -n "boxC (Client / Right): "
         ssh -o ConnectTimeout=2 boxC "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"
@@ -55,8 +62,9 @@ case "$cmd" in
     enable)
         echo "== Enabling Synergy autostart across fleet =="
         systemctl --user enable synergy-server
-        ssh bazina "systemctl --user enable synergy-client"
-        ssh boxC "systemctl --user enable synergy-client"
+        ssh bazina "systemctl --user enable synergy-client" 2>/dev/null || true
+        ssh boxC "systemctl --user enable synergy-client" 2>/dev/null || true
+        ssh -o ConnectTimeout=3 kof@192.168.1.105 "systemctl --user enable synergy-client" 2>/dev/null || true
         echo "Autostart enabled on login."
         ;;
 
@@ -65,6 +73,7 @@ case "$cmd" in
         systemctl --user disable synergy-server 2>/dev/null || true
         ssh bazina "systemctl --user disable synergy-client 2>/dev/null" || true
         ssh boxC "systemctl --user disable synergy-client 2>/dev/null" || true
+        ssh -o ConnectTimeout=3 kof@192.168.1.105 "systemctl --user disable synergy-client 2>/dev/null" || true
         echo "Autostart disabled."
         ;;
 
