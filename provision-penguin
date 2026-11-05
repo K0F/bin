@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# provision-penguin: Onboard or update penguin (Chromebook) once powered on and reachable
+set -euo pipefail
+
+PENGUIN_IP="${1:-192.168.1.105}"
+
+echo "[provision-penguin] Checking connectivity to penguin ($PENGUIN_IP)..."
+if ! ping -c 1 -W 2 "$PENGUIN_IP" &>/dev/null; then
+    echo "[provision-penguin] Error: penguin ($PENGUIN_IP) is currently offline / unreachable."
+    exit 1
+fi
+
+echo "[provision-penguin] Updating ~/bin and identity on penguin..."
+ssh -o ConnectTimeout=5 "kof@$PENGUIN_IP" '
+git -C ~/bin pull origin main
+sudo bash -c "cat << CONF > /etc/fleet_id
+# Fleet Node Identification
+FLEET_NODE=\"penguin\"
+FLEET_ARCH=\"x86_64\"
+FLEET_SIGN=\"[penguin:x86_64]\"
+CONF
+chmod 644 /etc/fleet_id"
+
+grep -q "bin-env" ~/.zshenv 2>/dev/null || echo "[ -f \"\$HOME/bin/bin-env\" ] && source \"\$HOME/bin/bin-env\"" >> ~/.zshenv
+grep -q "bin-env" ~/.bashrc 2>/dev/null || echo "[ -f \"\$HOME/bin/bin-env\" ] && source \"\$HOME/bin/bin-env\"" >> ~/.bashrc
+grep -q "bin-env" ~/.zshrc 2>/dev/null || echo "[ -f \"\$HOME/bin/bin-env\" ] && source \"\$HOME/bin/bin-env\"" >> ~/.zshrc
+
+~/bin/fleet-id
+'
+echo "[provision-penguin] Complete."
