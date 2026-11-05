@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Sync Evolution accounts, databases, signatures, keyrings, and dconf to fleet nodes (bazina, boxC)
+set -euo pipefail
+
+TARGET_NODES=("bazina" "boxC")
+
+echo "[sync-evolution] Stopping local Evolution background instances..."
+evolution --quit 2>/dev/null || true
+sleep 1
+
+TMP_DCONF=$(mktemp /tmp/evolution_dconf_XXXXXX.ini)
+dconf dump /org/gnome/evolution/ > "$TMP_DCONF"
+
+for node in "${TARGET_NODES[@]}"; do
+    echo "[sync-evolution] Syncing to ${node}..."
+    ssh -o ConnectTimeout=3 "${node}" "evolution --quit 2>/dev/null || true" || true
+    
+    # Sync config & data
+    rsync -avz --delete "$HOME/.config/evolution/" "${node}:~/.config/evolution/"
+    rsync -avz --delete "$HOME/.local/share/evolution/" "${node}:~/.local/share/evolution/"
+    
+    # Sync keyrings
+    if [ -f "$HOME/.local/share/keyrings/Default_keyring.keyring" ]; then
+        rsync -avz "$HOME/.local/share/keyrings/Default_keyring.keyring" "${node}:~/.local/share/keyrings/"
+    fi
+    if [ -f "$HOME/.local/share/keyrings/default" ]; then
+        rsync -avz "$HOME/.local/share/keyrings/default" "${node}:~/.local/share/keyrings/"
+    fi
+    
+    # Load dconf preferences
+    cat "$TMP_DCONF" | ssh "${node}" "dconf load /org/gnome/evolution/"
+    
+    # Fix permissions
+    ssh "${node}" "chmod -R u=rwX,go= ~/.config/evolution ~/.local/share/evolution ~/.local/share/keyrings"
+    echo "[sync-evolution] Done for ${node}."
+done
+
+rm -f "$TMP_DCONF"
+echo "[sync-evolution] Fleet Evolution synchronization complete."
