@@ -18,7 +18,7 @@ if [ -z "$FLEET_NODE" ]; then
         t520*|workstation*) export FLEET_NODE="t520" ;;
         bazina*)            export FLEET_NODE="bazina" ;;
         boxC*|B)            export FLEET_NODE="boxC" ;;
-        penguin*|crostini*) export FLEET_NODE="penguin" ;;
+        penguin*|crostini*) export FLEET_NODE="crostini" ;;
         localhost|android*) export FLEET_NODE="android" ;;
         *)                  export FLEET_NODE="$_HOST" ;;
     esac

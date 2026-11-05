@@ -15,9 +15,9 @@ ssh -o ConnectTimeout=5 "kof@$PENGUIN_IP" '
 git -C ~/bin pull origin main
 sudo bash -c "cat << CONF > /etc/fleet_id
 # Fleet Node Identification
-FLEET_NODE=\"penguin\"
+FLEET_NODE=\"crostini\"
 FLEET_ARCH=\"x86_64\"
-FLEET_SIGN=\"[penguin:x86_64]\"
+FLEET_SIGN=\"[crostini:x86_64]\"
 CONF
 chmod 644 /etc/fleet_id"
 

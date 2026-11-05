@@ -130,7 +130,8 @@ def main():
         alert = ""
         if hostname == "boxC" and mount == "/mnt/kof17" and disk_free < 3.0:
             alert = f"kof17 CRITICAL: {disk_free}G free"
-        elif hostname == "penguin" and disk_free < 1.0:
+        elif hostname in ("penguin", "crostini") and disk_free < 1.0:
+            alert = f"crostini LOW DISK: {disk_free}G free"
             alert = f"penguin LOW DISK: {disk_free}G free"
         elif bat_pct >= 0 and bat_pct <= 15:
             alert = f"{hostname} BATTERY CRITICAL: {bat_pct}%"
