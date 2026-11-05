@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# ~/bin/sdr-heat-scanner - Wireless M-Bus & Heat Meter SDR Telemetry Collector
+# Listens on 868.95 MHz (Mode C&T) and 868.3 MHz (Mode S) using RTL-SDR / rtl_433.
+# Part of The Observatoř environmental telemetry suite.
+
+set -euo pipefail
+
+DATA_DIR="$HOME/src/observator/data"
+LOG_FILE="$DATA_DIR/heat_meters.jsonl"
+SHM_FILE="/dev/shm/latest_heat_meter.json"
+PID_FILE="/tmp/sdr-heat-scanner.pid"
+
+mkdir -p "$DATA_DIR"
+
+cmd="${1:-scan}"
+
+case "$cmd" in
+    start)
+        if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "[sdr-heat] Scanner already running (PID: $(cat "$PID_FILE"))."
+            exit 0
+        fi
+
+        echo "[sdr-heat] Starting RTL-SDR heat meter scanner daemon (868.95 MHz Mode C&T)..."
+        # Run rtl_433 in background appending JSON lines
+        nohup rtl_433 -f 868.95M -s 1200k -R 104 -F json >> "$LOG_FILE" 2>/tmp/sdr-heat.err &
+        SCAN_PID=$!
+        echo "$SCAN_PID" > "$PID_FILE"
+        echo "[sdr-heat] Scanner started with PID $SCAN_PID, logging to $LOG_FILE"
+        ;;
+
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            if kill -0 "$PID" 2>/dev/null; then
+                kill "$PID" 2>/dev/null || true
+                echo "[sdr-heat] Stopped scanner daemon (PID: $PID)."
+            fi
+            rm -f "$PID_FILE"
+        else
+            pkill -f "rtl_433 -f 868.95M" 2>/dev/null || true
+            echo "[sdr-heat] Stopped all rtl_433 instances."
+        fi
+        ;;
+
+    status)
+        if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            echo "[sdr-heat] Scanner DAEMON ACTIVE (PID: $(cat "$PID_FILE"))"
+        else
+            echo "[sdr-heat] Scanner DAEMON INACTIVE"
+        fi
+        
+        if [ -f "$LOG_FILE" ]; then
+            TOTAL_PACKETS=$(wc -l < "$LOG_FILE")
+            echo "[sdr-heat] Total captured packets: $TOTAL_PACKETS"
+            echo "[sdr-heat] Unique meter IDs detected:"
+            grep -oP '"id":\s*\K[0-9]+' "$LOG_FILE" | sort -u | head -n 10 || echo "None yet"
+        else
+            echo "[sdr-heat] Log file $LOG_FILE not yet created."
+        fi
+        ;;
+
+    view|tail)
+        if [ -f "$LOG_FILE" ]; then
+            tail -f "$LOG_FILE"
+        else
+            echo "[sdr-heat] No packets logged yet in $LOG_FILE."
+        fi
+        ;;
+
+    scan|live)
+        echo "[sdr-heat] Starting live foreground scan on 868.95 MHz (Ctrl+C to stop)..."
+        exec rtl_433 -f 868.95M -s 1200k -R 104
+        ;;
+
+    *)
+        echo "Usage: sdr-heat-scanner <start|stop|status|scan|view>"
+        exit 1
+        ;;
+esac
