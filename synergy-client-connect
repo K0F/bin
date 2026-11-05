@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# ~/bin/synergy-client-connect - Dynamic Synergy Client Launcher
+# Automatically probes and connects to t520 whether on Ethernet, WiFi, or VPN.
+
+set -euo pipefail
+
+CLIENT_NAME="${1:-$(hostname -s 2>/dev/null || uname -n)}"
+CANDIDATE_SERVERS=(
+    "192.168.1.100:24800" # t520 Ethernet
+    "192.168.1.102:24800" # t520 WiFi
+    "10.0.0.18:24800"     # t520 Legacy LAN
+    "10.39.9.100:24800"   # t520 WireGuard VPN
+)
+
+find_active_server() {
+    for target in "${CANDIDATE_SERVERS[@]}"; do
+        local host="${target%%:*}"
+        local port="${target##*:}"
+        if (echo > /dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
+            echo "$target"
+            return 0
+        fi
+    done
+    return 1
+}
+
+echo "[synergy-connect] Starting dynamic Synergy client for '$CLIENT_NAME'..."
+
+while true; do
+    if ACTIVE_SERVER=$(find_active_server); then
+        echo "[synergy-connect] Found active server at $ACTIVE_SERVER. Connecting..."
+        /usr/local/bin/synergyc -f --disable-crypto --name "$CLIENT_NAME" "$ACTIVE_SERVER" || true
+        echo "[synergy-connect] Synergy client exited or disconnected. Probing again in 2s..."
+    else
+        echo "[synergy-connect] No reachable t520 server on Ethernet/WiFi/VPN. Retrying in 3s..."
+    fi
+    sleep 2
+done
