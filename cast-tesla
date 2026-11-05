@@ -9,10 +9,22 @@ import http.server
 import threading
 import time
 
-RENDERER_IP = "10.0.0.11"
-RENDERER_PORT = 54321
-LOCAL_IP = "10.0.0.1"
+RENDERER_IP = os.environ.get("RENDERER_IP", "192.168.1.107")
+RENDERER_PORT = int(os.environ.get("RENDERER_PORT", "54321"))
 LOCAL_STREAM_PORT = 8201
+
+def get_local_ip(target_ip):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((target_ip, 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "192.168.1.100"
+
+LOCAL_IP = get_local_ip(RENDERER_IP)
 CONTROL_URL = f"http://{RENDERER_IP}:{RENDERER_PORT}/_urn:schemas-upnp-org:service:AVTransport_control"
 
 def send_soap(action, body_xml):
