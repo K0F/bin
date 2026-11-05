@@ -1,242 +1,38 @@
-#!/usr/bin/env python3
-"""
-fleet-beacon.py — Multi-node Realtime Telemetry Beacon
-Part of Observatoř Top (otop)
+#!/usr/bin/env bash
+# =============================================================================
+# ~/bin/fleet-beacon — Fleet Realtime Telemetry Beacon Dispatcher
+# Zero-Bloat Architecture: Native C first, Bash fallback, Python avoided.
+# =============================================================================
 
-Broadcasts lightweight UDP telemetry packets (port 9850) every 1.5s.
-Zero external dependencies, minimal CPU impact (< 0.05%).
-"""
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-import os
-import sys
-import time
-import json
-import socket
-import shutil
-import glob
-import urllib.request
+# Ensure fleet environment is active
+if [ -z "$FLEET_NODE" ] || [ -z "$FLEET_ARCH" ]; then
+    [ -f "$BIN_DIR/bin-env" ] && source "$BIN_DIR/bin-env" 2>/dev/null || true
+fi
 
-PORT = 9850
-TARGETS = [
-    "<broadcast>",
-    "192.168.1.255",
-    "192.168.1.100",  # t520 (Ethernet)
-    "192.168.1.102",  # t520 (WiFi)
-    "192.168.1.104",  # bazina (Debian 13)
-    "192.168.1.101",  # boxC (RPi storage)
-    "192.168.1.105",  # penguin (Chromebook)
-    "192.168.1.103",  # phone (Android)
-    "10.39.9.255",    # WireGuard VPN Broadcast
-    "10.39.9.1",      # boxC VPN
-    "10.0.0.255",
-    "10.0.0.18",
-    "10.0.0.14",
-    "91.139.118.43",
-    "192.168.43.255",
-    "192.168.43.1",
-    "127.0.0.1"
-]
+# 1. Prefer native C compiled binary (< 1MB RAM, 0% CPU)
+if [ -x "$BIN_DIR/fleet-beacon-c" ]; then
+    exec "$BIN_DIR/fleet-beacon-c" "$@"
+fi
 
-def get_hostname():
-    if os.path.exists("/data/data/com.termux") or "TERMUX_VERSION" in os.environ:
-        return "phone"
-    h = socket.gethostname().split('.')[0]
-    if h in ("localhost", "android"):
-        return "phone"
-    return h
+# 2. Compile native C binary on the fly if compiler exists
+if command -v gcc >/dev/null 2>&1 && [ -f "$BIN_DIR/src/fleet-beacon.c" ]; then
+    gcc -O2 -Wall -Wextra -pedantic -o "$BIN_DIR/fleet-beacon-c" "$BIN_DIR/src/fleet-beacon.c" 2>/dev/null || true
+    if [ -x "$BIN_DIR/fleet-beacon-c" ]; then
+        exec "$BIN_DIR/fleet-beacon-c" "$@"
+    fi
+fi
 
-def read_cpu_percent(prev_stat):
-    try:
-        with open("/proc/stat", "r") as f:
-            fields = [float(x) for x in f.readline().strip().split()[1:8]]
-        # fields: user, nice, system, idle, iowait, irq, softirq
-        idle = fields[3] + fields[4]
-        total = sum(fields)
-        if prev_stat is not None:
-            prev_idle, prev_total = prev_stat
-            d_idle = idle - prev_idle
-            d_total = total - prev_total
-            pct = 100.0 * (1.0 - (d_idle / max(1.0, d_total)))
-            return round(max(0.0, min(100.0, pct)), 1), (idle, total)
-        return 0.0, (idle, total)
-    except Exception:
-        return 0.0, prev_stat
+# 3. Fallback to pure Bash implementation
+if [ -x "$BIN_DIR/fleet-beacon.sh" ]; then
+    exec "$BIN_DIR/fleet-beacon.sh" "$@"
+fi
 
-def read_memory():
-    total_gb, used_gb = 0.0, 0.0
-    try:
-        with open("/proc/meminfo", "r") as f:
-            mem = {}
-            for line in f:
-                parts = line.split(":")
-                if len(parts) == 2:
-                    mem[parts[0].strip()] = float(parts[1].strip().split()[0])
-            total_kb = mem.get("MemTotal", 0.0)
-            avail_kb = mem.get("MemAvailable", mem.get("MemFree", 0.0))
-            total_gb = round(total_kb / (1024.0 * 1024.0), 1)
-            used_gb = round((total_kb - avail_kb) / (1024.0 * 1024.0), 1)
-    except Exception:
-        pass
-    return used_gb, total_gb
+# 4. Last-ditch Python fallback if neither is available
+if [ -x "$BIN_DIR/fleet-beacon.py" ] && command -v python3 >/dev/null 2>&1; then
+    exec python3 "$BIN_DIR/fleet-beacon.py" "$@"
+fi
 
-def read_disk():
-    hostname = get_hostname()
-    check_paths = ["/"]
-    if hostname == "boxC":
-        check_paths = ["/mnt/kof17", "/"]
-    elif hostname == "bazina":
-        check_paths = ["/mnt/ssd", "/mnt/seagate", "/"]
-
-    for p in check_paths:
-        if os.path.exists(p):
-            try:
-                du = shutil.disk_usage(p)
-                free_gb = round(du.free / (1024.0 ** 3), 1)
-                total_gb = round(du.total / (1024.0 ** 3), 1)
-                return p, free_gb, total_gb
-            except Exception:
-                continue
-    return "/", 0.0, 0.0
-
-def read_gpu():
-    # AMD GPU busy percent (sysfs)
-    for path in glob.glob("/sys/class/drm/card*/device/gpu_busy_percent"):
-        try:
-            with open(path, "r") as f:
-                val = f.read().strip()
-                return f"Navi10 {val}%"
-        except Exception:
-            pass
-    return ""
-
-def read_temp():
-    for path in ["/sys/class/thermal/thermal_zone0/temp", "/sys/class/hwmon/hwmon0/temp1_input"]:
-        if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    return int(int(f.read().strip()) / 1000)
-            except Exception:
-                pass
-    return 0
-
-def read_battery():
-    # Probe ACPI / sysfs battery capacity
-    for p in glob.glob("/sys/class/power_supply/BAT*/capacity") + glob.glob("/sys/class/power_supply/*battery*/capacity") + glob.glob("/sys/class/power_supply/sbs-*/capacity"):
-        try:
-            with open(p, "r") as f:
-                return int(f.read().strip())
-        except Exception:
-            pass
-    return -1
-
-def main():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-    hostname = get_hostname()
-    prev_stat = None
-    print(f"[fleet-beacon] Starting telemetry beacon on {hostname} (port {PORT})...")
-
-    while True:
-        cpu_pct, prev_stat = read_cpu_percent(prev_stat)
-        mem_used, mem_total = read_memory()
-        mount, disk_free, disk_total = read_disk()
-        gpu_str = read_gpu()
-        temp_c = read_temp()
-        bat_pct = read_battery()
-
-        alert = ""
-        if hostname == "boxC" and mount == "/mnt/kof17" and disk_free < 3.0:
-            alert = f"kof17 CRITICAL: {disk_free}G free"
-        elif hostname in ("penguin", "crostini") and disk_free < 1.0:
-            alert = f"crostini LOW DISK: {disk_free}G free"
-            alert = f"penguin LOW DISK: {disk_free}G free"
-        elif bat_pct >= 0 and bat_pct <= 15:
-            alert = f"{hostname} BATTERY CRITICAL: {bat_pct}%"
-
-        payload = {
-            "name": hostname,
-            "hostname": hostname,
-            "node": hostname,
-            "arch": os.uname().machine,
-            "sign": f"[{hostname}:{os.uname().machine}]",
-            "timestamp": time.time(),
-            "cpu_percent": cpu_pct,
-            "mem_used_gb": mem_used,
-            "mem_total_gb": mem_total,
-            "disk_mount": mount,
-            "disk_free_gb": disk_free,
-            "disk_total_gb": disk_total,
-            "gpu_str": gpu_str,
-            "temp_c": temp_c,
-            "battery_percent": bat_pct,
-            "alert": alert
-        }
-
-        msg = json.dumps(payload).encode("utf-8")
-
-        for target in TARGETS:
-            try:
-                sock.sendto(msg, (target, PORT))
-            except Exception:
-                pass
-
-        # Update local SHM cache
-        try:
-            shm_fleet = "/dev/shm/fleet_telemetry.json"
-            data = {}
-            if os.path.exists(shm_fleet):
-                try:
-                    with open(shm_fleet, "r") as f:
-                        data = json.load(f)
-                except Exception:
-                    data = {}
-            data[hostname] = payload
-
-            # Merge any WAN telemetry files (< 30s old)
-            try:
-                import glob
-                for wpath in glob.glob("/dev/shm/fleet_wan_*.json"):
-                    if time.time() - os.path.getmtime(wpath) < 30:
-                        with open(wpath, "r") as wf:
-                            wpayload = json.load(wf)
-                            if isinstance(wpayload, dict) and "name" in wpayload:
-                                data[wpayload["name"]] = wpayload
-            except Exception:
-                pass
-
-            tmp_path = f"{shm_fleet}.tmp.{os.getpid()}"
-            with open(tmp_path, "w") as f:
-                json.dump(data, f)
-            try:
-                os.chmod(tmp_path, 0o666)
-            except Exception:
-                pass
-            os.replace(tmp_path, shm_fleet)
-        except Exception:
-            pass
-
-        # WAN HTTP bridge fallback for mobile/remote nodes (e.g. Staroměstská)
-        if hostname != "boxC":
-            try:
-                req = urllib.request.Request(
-                    "http://91.139.118.43/telemetry.php",
-                    data=msg,
-                    headers={"Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=1.5) as resp:
-                    if resp.status == 200:
-                        remote_data = json.loads(resp.read().decode("utf-8"))
-                        if isinstance(remote_data, dict) and "boxC" in remote_data:
-                            shm_fleet = "/dev/shm/fleet_telemetry.json"
-                            tmp_path = f"{shm_fleet}.tmp.{os.getpid()}"
-                            with open(tmp_path, "w") as f:
-                                json.dump(remote_data, f)
-                            os.replace(tmp_path, shm_fleet)
-            except Exception:
-                pass
-
-        time.sleep(1.5)
-
-if __name__ == "__main__":
-    main()
+echo "Error: No viable fleet-beacon runtime found." >&2
+exit 1
