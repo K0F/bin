@@ -1,27 +1,48 @@
 #!/usr/bin/env bash
 # ~/bin/af - Antigravity Fleet Unified Session Connector
-# Attaches to the central persistent Antigravity CLI session on boxC.
+# Attaches to the central persistent Antigravity CLI session on bazina.
 
 SESSION_NAME="agy"
-CENTRAL_IP="10.0.0.14"
-CENTRAL_HOST="boxC"
+CENTRAL_HOST="bazina"
+CENTRAL_IP="192.168.1.104"
+CENTRAL_LEGACY_IP="10.0.0.15"
 REMOTE_PORT="2222"
 EXTERNAL_HOST="home"
+
+# Ensure -c (continue previous session) is always included unless already specified
+HAS_CONTINUE=false
+for arg in "$@"; do
+    if [[ "$arg" == "-c" || "$arg" == "--continue" || "$arg" == --conversation* ]]; then
+        HAS_CONTINUE=true
+        break
+    fi
+done
+
+if [[ "$HAS_CONTINUE" == false ]]; then
+    AGY_ARGS=("-c" "$@")
+else
+    AGY_ARGS=("$@")
+fi
 
 # Determine current hostname
 CURRENT_HOST="$(hostname)"
 
-if [[ "$CURRENT_HOST" == "boxC" || "$CURRENT_HOST" == "B" ]]; then
-    # Already on central node: attach or create local tmux session
-    exec tmux new-session -A -s "$SESSION_NAME" agy "$@"
+# Prevent tmux nesting error if already inside another tmux session
+unset TMUX
+
+if [[ "$CURRENT_HOST" == "$CENTRAL_HOST" ]]; then
+    # Already on central node (bazina): attach or create local tmux session
+    exec tmux new-session -A -s "$SESSION_NAME" agy "${AGY_ARGS[@]}"
 else
-    # Remote node (bazina, t520, chromebook, or phone)
-    # 1. Try local LAN first
-    if ping -c 1 -W 1 "$CENTRAL_IP" &>/dev/null; then
-        exec ssh -t "$CENTRAL_HOST" "tmux new-session -A -s '$SESSION_NAME' agy $*"
+    # Remote node (t520, boxC, penguin, or phone)
+    CMD_ARGS=$(printf "%q " "${AGY_ARGS[@]}")
+
+    # 1. Try local LAN first (by hostname or IP)
+    if ping -c 1 -W 1 "$CENTRAL_HOST" &>/dev/null || ping -c 1 -W 1 "$CENTRAL_IP" &>/dev/null || ping -c 1 -W 1 "$CENTRAL_LEGACY_IP" &>/dev/null; then
+        exec ssh -t "$CENTRAL_HOST" "tmux new-session -A -s '$SESSION_NAME' agy $CMD_ARGS"
     else
-        # 2. Fallback to external SSH via home gateway
-        echo "LAN connection to $CENTRAL_HOST unreachable, attempting external fallback..."
-        exec ssh -p "$REMOTE_PORT" -t "$EXTERNAL_HOST" "tmux new-session -A -s '$SESSION_NAME' agy $*"
+        # 2. Fallback to external SSH via home gateway (boxC) jumping to bazina
+        echo "LAN connection to $CENTRAL_HOST unreachable, attempting external fallback via $EXTERNAL_HOST..."
+        exec ssh -p "$REMOTE_PORT" -t "$EXTERNAL_HOST" "ssh -t '$CENTRAL_HOST' \"tmux new-session -A -s '$SESSION_NAME' agy $CMD_ARGS\""
     fi
 fi
