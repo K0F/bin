@@ -1,51 +1,53 @@
 #!/usr/bin/env bash
-# ~/bin/af - Antigravity Fleet Unified Session Connector
-# Attaches to the central persistent Antigravity CLI session (default: bazina).
+# ~/bin/af - Antigravity Fleet Session Connector
+# Each node in the fleet casts its own local session of Techné.
+# If a specific node is requested (e.g. af bazina), connects to that node.
 
-SESSION_NAME="agy"
-DEFAULT_HOST="bazina"
-DEFAULT_IP="192.168.1.104"
-FALLBACK_HOST="boxC"
-FALLBACK_IP="192.168.1.101"
-REMOTE_PORT="2222"
-EXTERNAL_HOST="home"
+set -euo pipefail
+
+SESSION_NAME="techne"
 DEFAULT_CONV="9860fe31-3526-48d1-9063-3e58e630faf9"
-
-# Determine current node
 CURRENT_HOST="$(hostname -s 2>/dev/null || uname -n)"
-if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux" ]; then
+if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; then
     CURRENT_HOST="phone"
 fi
 
-# Build agy conversation parameter if not already supplied
+TARGET_NODE=""
+if [ $# -gt 0 ]; then
+    case "$1" in
+        t520|bazina|boxC|penguin|android|phone)
+            TARGET_NODE="$1"
+            shift
+            ;;
+    esac
+fi
+
+# Build agy invocation
 AGY_INVOCATION="agy"
 if [[ "$*" != *"--conversation"* ]] && [[ -n "$DEFAULT_CONV" ]]; then
     AGY_INVOCATION="agy --conversation=$DEFAULT_CONV"
 fi
 
-if [[ "$CURRENT_HOST" == "bazina" ]]; then
-    # Already on default node (bazina): attach or create local tmux session
+log_cast() {
+    local node="${1:-$CURRENT_HOST}"
+    if command -v now >/dev/null 2>&1; then
+        now "[AF:$node] Techné session cast/attached" || true
+    fi
+}
+
+if [ -n "$TARGET_NODE" ] && [ "$TARGET_NODE" != "$CURRENT_HOST" ]; then
+    log_cast "$TARGET_NODE"
+    echo "[af] Connecting to Techné session on $TARGET_NODE..."
+    exec ssh -t "$TARGET_NODE" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
+fi
+
+# Cast local session of Techné
+log_cast "$CURRENT_HOST"
+if command -v tmux >/dev/null 2>&1; then
     exec tmux new-session -A -s "$SESSION_NAME" $AGY_INVOCATION "$@"
-elif [[ "$CURRENT_HOST" == "boxC" || "$CURRENT_HOST" == "B" ]]; then
-    # On boxC: connect to bazina if reachable, otherwise fall back to local boxC session
-    if ping -c 1 -W 1 "$DEFAULT_IP" &>/dev/null || ssh -o BatchMode=yes -o ConnectTimeout=2 "$DEFAULT_HOST" "true" &>/dev/null; then
-        exec ssh -t "$DEFAULT_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
-    else
-        echo "[af] bazina is unreachable from boxC; falling back to local boxC session..."
-        exec tmux new-session -A -s "$SESSION_NAME" $AGY_INVOCATION "$@"
-    fi
+elif command -v agy >/dev/null 2>&1; then
+    exec agy --conversation="$DEFAULT_CONV" "$@"
 else
-    # Remote node (t520, penguin, android/phone, etc.)
-    # 1. Try default node (bazina) on LAN
-    if ping -c 1 -W 1 "$DEFAULT_IP" &>/dev/null || ssh -o BatchMode=yes -o ConnectTimeout=2 "$DEFAULT_HOST" "true" &>/dev/null; then
-        exec ssh -t "$DEFAULT_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
-    # 2. Fallback to boxC on LAN
-    elif ping -c 1 -W 1 "$FALLBACK_IP" &>/dev/null || ssh -o BatchMode=yes -o ConnectTimeout=2 "$FALLBACK_HOST" "true" &>/dev/null; then
-        echo "[af] bazina unreachable; falling back to boxC on LAN..."
-        exec ssh -t "$FALLBACK_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
-    # 3. Fallback to external SSH via home gateway
-    else
-        echo "[af] LAN unreachable; attempting external gateway fallback..."
-        exec ssh -p "$REMOTE_PORT" -t "$EXTERNAL_HOST" "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
-    fi
+    echo "[af] Local agy/tmux not found on $CURRENT_HOST; falling back to boxC..."
+    exec ssh -t boxC "tmux new-session -A -s '$SESSION_NAME' $AGY_INVOCATION $*"
 fi
