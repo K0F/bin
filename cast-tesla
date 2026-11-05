@@ -27,7 +27,22 @@ def get_local_ip(target_ip):
 LOCAL_IP = get_local_ip(RENDERER_IP)
 CONTROL_URL = f"http://{RENDERER_IP}:{RENDERER_PORT}/_urn:schemas-upnp-org:service:AVTransport_control"
 
+def is_renderer_online(ip, port):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.5)
+        res = s.connect_ex((ip, port))
+        s.close()
+        return res == 0
+    except Exception:
+        return False
+
 def send_soap(action, body_xml):
+    if not is_renderer_online(RENDERER_IP, RENDERER_PORT):
+        print(f"[cast-gxbox] Upozornění: Port {RENDERER_PORT} na {RENDERER_IP} zatím neodpovídá.")
+        print(f"[cast-gxbox] Zapněte na set-top boxu DLNA DMR: Menu -> Aplikace / Síť -> DLNA DMR.")
+        return None
     soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 <s:Body>
