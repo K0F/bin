@@ -68,7 +68,8 @@ cmd_cron() {
         local today
         today=$(date +%Y-%m-%d)
         git commit -m "archive ($today): nightly 23:45 snapshot"
-        git push origin main || echo "Warning: git push failed (remote offline or ahead)"
+        git push origin main || echo "Warning: git push origin failed (remote offline or ahead)"
+        git push bazina main || echo "Warning: git push bazina failed (remote offline or ahead)"
         echo "Nightly Git checkpoint completed."
     else
         echo "No changes to commit."
