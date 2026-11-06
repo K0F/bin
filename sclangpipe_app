@@ -72,7 +72,7 @@ File.open(pid_loc, "w"){ |f|
 }
 
 #remove the pipe if it exists
-if File.exists?(pipe_loc)
+if File.exist?(pipe_loc)
   FileUtils.rm(pipe_loc)
 end
 #make a new pipe

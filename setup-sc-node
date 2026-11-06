@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ~/bin/setup-sc-node — Fleet-Wide SuperCollider & Audio Provisioner
+# Ensures sclang, scsynth, sc3-plugins, DWGReverb, XYScope, NetProxy, scvim,
+# and PipeWire-JACK / ALSA-JACK routing work identically across all fleet nodes
+# (t520, bazina, boxC, crostini/penguin).
+# =============================================================================
+set -euo pipefail
+
+HOST_SHORT="$(hostname -s 2>/dev/null || uname -n)"
+ARCH="$(uname -m)"
+
+echo "== [setup-sc-node] Configuring SuperCollider on ${HOST_SHORT} (${ARCH}) =="
+
+if command -v apt-get >/dev/null 2>&1; then
+    if ! command -v sclang >/dev/null 2>&1 || ! command -v ruby >/dev/null 2>&1 || ! dpkg -s sc3-plugins >/dev/null 2>&1; then
+        echo "== [1/4] Installing SuperCollider, sc3-plugins, JACK/PipeWire, and scvim deps =="
+        sudo apt-get update -o Acquire::Check-Valid-Until=false || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            supercollider-language supercollider-server supercollider-common \
+            sc3-plugins sc3-plugins-server sc3-plugins-language \
+            jackd2 pipewire-jack pulseaudio-utils ruby vim screen libglfw3 openssh-server
+        sudo apt-get clean || true
+    fi
+fi
+
+# Enable PipeWire-JACK drop-in replacement if pipewire is installed
+if ls /usr/share/doc/pipewire/examples/ld.so.conf.d/pipewire-jack-*.conf >/dev/null 2>&1; then
+    sudo cp /usr/share/doc/pipewire/examples/ld.so.conf.d/pipewire-jack-*.conf /etc/ld.so.conf.d/ 2>/dev/null || true
+    sudo ldconfig || true
+fi
+
+# On Crostini (penguin), enable sshd and persistent reverse SSH tunnel to boxC (port 2205)
+if [ "$HOST_SHORT" = "penguin" ] || [ "$HOST_SHORT" = "crostini" ]; then
+    echo "== [2/4] Configuring Crostini SSH server & reverse tunnel to boxC:2205 =="
+    sudo systemctl enable --now ssh 2>/dev/null || true
+    mkdir -p "$HOME/.config/systemd/user"
+    cat > "$HOME/.config/systemd/user/crostini-tunnel.service" << 'EOF'
+[Unit]
+Description=Crostini Reverse SSH Tunnel to boxC (port 2205)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new -N -R 2205:127.0.0.1:22 boxC
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable --now crostini-tunnel.service 2>/dev/null || true
+fi
+
+# Download and unpack SuperCollider extensions, startup.scd, scvim, and kof patches if missing
+if [ ! -f "$HOME/.config/SuperCollider/startup.scd" ] || [ ! -d "$HOME/src/sc/utils/DWGReverb" ] || [ ! -d "$HOME/.vim/pack/my/start/scvim" ]; then
+    echo "== [3/4] Fetching SuperCollider bundle (startup.scd, Extensions, scvim, kof patches) =="
+    TMP_TAR="/tmp/sc-crostini.tar.gz"
+    if curl -sfL "http://192.168.1.101/sc-crostini.tar.gz" -o "$TMP_TAR" || curl -sfL "http://91.139.118.43/sc-crostini.tar.gz" -o "$TMP_TAR"; then
+        tar -xzf "$TMP_TAR" -C "$HOME"
+        rm -f "$TMP_TAR"
+    elif ssh -o BatchMode=yes -o ConnectTimeout=3 boxC "true" 2>/dev/null; then
+        rsync -a boxC:/home/kof/.config/SuperCollider/ "$HOME/.config/SuperCollider/"
+        rsync -a boxC:/home/kof/.local/share/SuperCollider/ "$HOME/.local/share/SuperCollider/"
+        rsync -a boxC:/home/kof/.vim/pack/my/start/scvim/ "$HOME/.vim/pack/my/start/scvim/"
+        rsync -a boxC:/home/kof/src/sc/ "$HOME/src/sc/"
+    fi
+fi
+
+mkdir -p "$HOME/src/sc/kof/scwork" "$HOME/recordings"
+
+# Install architecture-matched DWGReverb.so into /usr/lib/SuperCollider/plugins/
+if [ -d "/usr/lib/SuperCollider/plugins" ]; then
+    if [ "$ARCH" = "x86_64" ] && [ -f "$HOME/src/sc/utils/DWGReverb/DWGReverb.so" ]; then
+        sudo cp "$HOME/src/sc/utils/DWGReverb/DWGReverb.so" /usr/lib/SuperCollider/plugins/ || true
+    fi
+fi
+
+echo "== [4/4] Verifying SuperCollider (sclang + scsynth + KOLEKTIV) =="
+cat << 'EOF' > /tmp/sc_verify.scd
+fork {
+    6.wait;
+    if(Server.default.serverRunning) {
+        "=== SUPERCOLLIDER_NODE_READY ===".postln;
+        0.exit;
+    } {
+        "=== SUPERCOLLIDER_NODE_FAIL ===".postln;
+        1.exit;
+    };
+};
+EOF
+
+if command -v pw-jack >/dev/null 2>&1 && pgrep -x pipewire >/dev/null 2>&1; then
+    QT_QPA_PLATFORM=offscreen pw-jack sclang /tmp/sc_verify.scd
+else
+    QT_QPA_PLATFORM=offscreen sclang /tmp/sc_verify.scd
+fi
+rm -f /tmp/sc_verify.scd
+echo "== [✓] SuperCollider ready on ${HOST_SHORT} (${ARCH}) =="
