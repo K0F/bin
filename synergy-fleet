@@ -4,6 +4,16 @@ set -euo pipefail
 
 cmd="${1:-status}"
 
+ssh_penguin() {
+    local remote_cmd="$1"
+    if ssh -o ConnectTimeout=2 kof@192.168.1.105 "$remote_cmd" 2>/dev/null; then
+        return 0
+    elif ssh -o ConnectTimeout=2 -p 2205 kof@boxC "$remote_cmd" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 case "$cmd" in
     start)
         echo "== Starting Synergy Server on t520 (Center) =="
@@ -17,7 +27,7 @@ case "$cmd" in
         ssh -o ConnectTimeout=3 boxC "systemctl --user start synergy-client" 2>/dev/null || echo "Warning: Could not start on boxC"
 
         echo "== Starting Synergy Client on penguin (Left-Bottom) =="
-        ssh -o ConnectTimeout=3 kof@192.168.1.105 "systemctl --user start synergy-client" 2>/dev/null || echo "Notice: penguin is offline / sleep"
+        ssh_penguin "systemctl --user start synergy-client" || echo "Notice: penguin is offline / sleep or SSH port not forwarded"
 
         echo ""
         "$0" status
@@ -28,7 +38,7 @@ case "$cmd" in
         systemctl --user stop synergy-server 2>/dev/null || true
         ssh -o ConnectTimeout=3 bazina "systemctl --user stop synergy-client" 2>/dev/null || true
         ssh -o ConnectTimeout=3 boxC "systemctl --user stop synergy-client" 2>/dev/null || true
-        ssh -o ConnectTimeout=3 kof@192.168.1.105 "systemctl --user stop synergy-client" 2>/dev/null || true
+        ssh_penguin "systemctl --user stop synergy-client" 2>/dev/null || true
         echo "All Synergy services stopped."
         ;;
 
@@ -47,7 +57,7 @@ case "$cmd" in
         ssh -o ConnectTimeout=2 bazina "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"
 
         echo -n "penguin (Client / Left-Bottom): "
-        ssh -o ConnectTimeout=2 kof@192.168.1.105 "systemctl --user is-active synergy-client 2>/dev/null" || echo "offline"
+        ssh_penguin "systemctl --user is-active synergy-client 2>/dev/null" || echo "offline / SSH closed"
 
         echo -n "boxC (Client / Right): "
         ssh -o ConnectTimeout=2 boxC "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"

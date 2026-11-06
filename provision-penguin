@@ -10,7 +10,7 @@ if ! ping -c 1 -W 2 "$PENGUIN_IP" &>/dev/null; then
     exit 1
 fi
 
-echo "[provision-penguin] Updating ~/bin and identity on penguin..."
+echo "[provision-penguin] Updating ~/bin, identity, and SuperCollider on penguin..."
 ssh -o ConnectTimeout=5 "kof@$PENGUIN_IP" '
 git -C ~/bin pull origin main
 sudo bash -c "cat << CONF > /etc/fleet_id
@@ -26,5 +26,6 @@ grep -q "bin-env" ~/.bashrc 2>/dev/null || echo "[ -f \"\$HOME/bin/bin-env\" ] &
 grep -q "bin-env" ~/.zshrc 2>/dev/null || echo "[ -f \"\$HOME/bin/bin-env\" ] && source \"\$HOME/bin/bin-env\"" >> ~/.zshrc
 
 ~/bin/fleet-id
+~/bin/setup-sc-node
 '
 echo "[provision-penguin] Complete."

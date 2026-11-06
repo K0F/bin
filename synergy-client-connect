@@ -24,18 +24,37 @@ find_active_server() {
     return 1
 }
 
+# Ensure DISPLAY is set for graphical/XWayland environments (e.g. Crostini or systemd user services)
+export DISPLAY="${DISPLAY:-:0}"
+
+# Locate synergyc binary across standard paths
+SYNERGYC="$(command -v synergyc 2>/dev/null || true)"
+if [ -z "$SYNERGYC" ]; then
+    for candidate in "/usr/local/bin/synergyc" "/usr/bin/synergyc" "$HOME/.local/bin/synergyc"; do
+        if [ -x "$candidate" ]; then
+            SYNERGYC="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$SYNERGYC" ]; then
+    echo "[synergy-connect] Error: synergyc binary not found in PATH or standard locations." >&2
+    exit 1
+fi
+
 # Determine crypto flag based on synergyc build (note: synergyc --help exits with code 3)
 CRYPTO_FLAG=""
-if (/usr/local/bin/synergyc --help 2>&1 || true) | grep -q -- '--disable-crypto'; then
+if ("$SYNERGYC" --help 2>&1 || true) | grep -q -- '--disable-crypto'; then
     CRYPTO_FLAG="--disable-crypto"
 fi
 
-echo "[synergy-connect] Starting dynamic Synergy client for '$CLIENT_NAME'..."
+echo "[synergy-connect] Starting dynamic Synergy client for '$CLIENT_NAME' using $SYNERGYC..."
 
 while true; do
     if ACTIVE_SERVER=$(find_active_server); then
         echo "[synergy-connect] Found active server at $ACTIVE_SERVER. Connecting..."
-        /usr/local/bin/synergyc -f $CRYPTO_FLAG --name "$CLIENT_NAME" "$ACTIVE_SERVER" || true
+        "$SYNERGYC" -f $CRYPTO_FLAG --name "$CLIENT_NAME" "$ACTIVE_SERVER" || true
         echo "[synergy-connect] Synergy client exited or disconnected. Probing again in 2s..."
     else
         echo "[synergy-connect] No reachable t520 server on Ethernet/WiFi/VPN. Retrying in 3s..."
