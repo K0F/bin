@@ -27,10 +27,13 @@ find_active_server() {
 # Ensure DISPLAY is set for graphical/XWayland environments (e.g. Crostini or systemd user services)
 export DISPLAY="${DISPLAY:-:0}"
 
-# Locate synergyc binary across standard paths
-SYNERGYC="$(command -v synergyc 2>/dev/null || true)"
+# Locate synergyc / barrierc / deskflow-client binary across standard paths
+SYNERGYC="$(command -v synergyc 2>/dev/null || command -v barrierc 2>/dev/null || command -v deskflow-client 2>/dev/null || true)"
 if [ -z "$SYNERGYC" ]; then
-    for candidate in "/usr/local/bin/synergyc" "/usr/bin/synergyc" "$HOME/.local/bin/synergyc"; do
+    for candidate in \
+        "/usr/local/bin/synergyc" "/usr/bin/synergyc" "$HOME/.local/bin/synergyc" \
+        "/usr/local/bin/barrierc" "/usr/bin/barrierc" \
+        "/usr/local/bin/deskflow-client" "/usr/bin/deskflow-client"; do
         if [ -x "$candidate" ]; then
             SYNERGYC="$candidate"
             break
@@ -39,7 +42,8 @@ if [ -z "$SYNERGYC" ]; then
 fi
 
 if [ -z "$SYNERGYC" ]; then
-    echo "[synergy-connect] Error: synergyc binary not found in PATH or standard locations." >&2
+    echo "[synergy-connect] Error: Neither synergyc, barrierc, nor deskflow-client found in PATH or standard locations." >&2
+    echo "[synergy-connect] Please install barrier or deskflow: 'sudo apt install barrier' or 'sudo apt install deskflow'" >&2
     exit 1
 fi
 
