@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""
+~/bin/pgp-mail — Universal RFC 3156 PGP/MIME & Inline Signed Email Dispatcher
+Fleet utility for zero-bloat, cypherpunk cryptographic email signing.
+"""
+
+import os
+import sys
+import argparse
+import subprocess
+import mimetypes
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+
+DEFAULT_KEY = "369D0E68D252C6C43B4997E3CBE1784B83F6BA04"
+DEFAULT_FROM = "Kryštof Pešek (Kof) <kryštof@pešek.com>"
+
+def canonicalize_crlf(data: bytes) -> bytes:
+    # Ensure all newlines are strictly CRLF per RFC 3156 / RFC 2046
+    lines = data.splitlines()
+    return b"\r\n".join(lines) + b"\r\n"
+
+def gpg_detach_sign(payload: bytes, key_id: str) -> bytes:
+    cmd = ["gpg", "--batch", "--armor", "--detach-sign", "-u", key_id]
+    proc = subprocess.run(cmd, input=payload, capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"GPG detached signing failed: {proc.stderr.decode('utf-8', errors='ignore')}")
+    return proc.stdout
+
+def gpg_clearsign(text: str, key_id: str) -> str:
+    cmd = ["gpg", "--batch", "--armor", "--clearsign", "-u", key_id]
+    proc = subprocess.run(cmd, input=text.encode("utf-8"), capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"GPG clearsign failed: {proc.stderr.decode('utf-8', errors='ignore')}")
+    return proc.stdout.decode("utf-8", errors="ignore")
+
+def build_pgp_mime_message(from_addr: str, to_addr: str, subject: str, body_text: str, attachments: list, key_id: str) -> bytes:
+    import uuid
+    boundary = f"===============pgp_{uuid.uuid4().hex[:16]}=="
+
+    # Inner content container
+    if attachments:
+        inner = MIMEMultipart("mixed")
+        inner.attach(MIMEText(body_text, "plain", "utf-8"))
+        for fpath in attachments:
+            ctype, _ = mimetypes.guess_type(fpath)
+            maintype, subtype = (ctype.split("/", 1)) if ctype else ("application", "octet-stream")
+            with open(fpath, "rb") as fp:
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(fp.read())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{os.path.basename(fpath)}"')
+                inner.attach(part)
+        content_bytes = inner.as_bytes()
+    else:
+        text_part = MIMEText(body_text, "plain", "utf-8")
+        content_bytes = text_part.as_bytes()
+
+    canonical_content = canonicalize_crlf(content_bytes)
+
+    # Detached signature
+    sig_bytes = gpg_detach_sign(canonical_content, key_id)
+    canonical_sig = canonicalize_crlf(sig_bytes)
+
+    # Reconstruct exact RFC 3156 multipart/signed
+    body_payload = (
+        f"--{boundary}\r\n".encode("ascii") +
+        canonical_content +
+        f"\r\n--{boundary}\r\n".encode("ascii") +
+        b"Content-Type: application/pgp-signature; name=\"signature.asc\"\r\n" +
+        b"Content-Description: OpenPGP Digital Signature\r\n" +
+        b"Content-Disposition: attachment; filename=\"signature.asc\"\r\n\r\n" +
+        canonical_sig +
+        f"\r\n--{boundary}--\r\n".encode("ascii")
+    )
+
+    header_lines = [
+        f"From: {from_addr}",
+        f"To: {to_addr}",
+        f"Subject: {subject}",
+        f"MIME-Version: 1.0",
+        f"X-PGP-Agent: Antigravity/Fleet-OpenPGP",
+        f'Content-Type: multipart/signed; boundary="{boundary}"; micalg=pgp-sha512; protocol="application/pgp-signature"'
+    ]
+    header_bytes = "\r\n".join(header_lines).encode("utf-8") + b"\r\n\r\n"
+
+    return header_bytes + body_payload
+
+def build_inline_message(from_addr: str, to_addr: str, subject: str, body_text: str, key_id: str) -> bytes:
+    signed_text = gpg_clearsign(body_text, key_id)
+    msg = MIMEText(signed_text, "plain", "utf-8")
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg["X-PGP-Signature"] = "OpenPGP Inline Clearsign"
+    return msg.as_bytes()
+
+def find_mta():
+    for bin_path in ["/usr/bin/msmtp", "/usr/local/bin/msmtp", "/usr/sbin/sendmail", "/usr/lib/sendmail"]:
+        if os.path.exists(bin_path) and os.access(bin_path, os.X_OK):
+            return bin_path
+    return None
+
+def main():
+    parser = argparse.ArgumentParser(description="Send PGP/MIME or Inline Signed Emails")
+    parser.add_argument("to", help="Recipient email address")
+    parser.add_argument("-s", "--subject", default="(bez předmětu)", help="Email subject")
+    parser.add_argument("-f", "--from-addr", default=DEFAULT_FROM, help=f"From header (default: {DEFAULT_FROM})")
+    parser.add_argument("-m", "--message", help="Message body (reads from stdin if omitted)")
+    parser.add_argument("-a", "--attach", action="append", default=[], help="File to attach (repeatable)")
+    parser.add_argument("-k", "--key", default=DEFAULT_KEY, help=f"GPG key ID/Fingerprint (default: {DEFAULT_KEY})")
+    parser.add_argument("--inline", action="store_true", help="Use inline ASCII clearsign instead of PGP/MIME")
+    parser.add_argument("--dry-run", action="store_true", help="Print raw email to stdout without dispatching")
+    parser.add_argument("--mta", help="Custom MTA command line")
+
+    args = parser.parse_args()
+
+    # Read body
+    if args.message:
+        body = args.message
+    else:
+        if sys.stdin.isatty():
+            print("[*] Enter message body (terminate with Ctrl+D):", file=sys.stderr)
+        body = sys.stdin.read()
+
+    # Build signed message
+    if args.inline:
+        if args.attach:
+            print("[-] Error: --inline does not support attachments. Use standard PGP/MIME.", file=sys.stderr)
+            sys.exit(1)
+        raw_msg = build_inline_message(args.from_addr, args.to, args.subject, body, args.key)
+    else:
+        raw_msg = build_pgp_mime_message(args.from_addr, args.to, args.subject, body, args.attach, args.key)
+
+    if args.dry_run:
+        sys.stdout.buffer.write(raw_msg)
+        return
+
+    # Dispatch
+    mta = args.mta or find_mta()
+    if not mta:
+        print("[-] Error: No MTA found (checked msmtp, sendmail). Use --dry-run or install msmtp/postfix.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[*] Dispatching PGP-signed email to {args.to} via {mta} (Key: {args.key[:16]}...)...")
+    mta_cmd = [mta, "-t"] if "msmtp" in mta else [mta, "-i", "-t"]
+    proc = subprocess.run(mta_cmd, input=raw_msg, capture_output=True)
+    if proc.returncode == 0:
+        print(f"[✓] Email cryptographically signed and dispatched successfully.")
+    else:
+        print(f"[-] MTA error (code {proc.returncode}): {proc.stderr.decode('utf-8', errors='ignore')}", file=sys.stderr)
+        sys.exit(proc.returncode)
+
+if __name__ == "__main__":
+    main()
