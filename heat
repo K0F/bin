@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""
+heat: Observatoř Wireless Heating Telemetry CLI
+Manages, queries, and inspects 868.95 MHz Wireless M-Bus radiator metrics.
+"""
+
+import os
+import sys
+import json
+import sqlite3
+import subprocess
+from datetime import datetime
+
+HOME = os.path.expanduser("~")
+DATA_DIR = os.path.join(HOME, "src", "observator", "data")
+DB_PATH = os.path.join(DATA_DIR, "heat_meters.db")
+JSONL_PATH = os.path.join(DATA_DIR, "heat_meters.jsonl")
+SHM_LATEST = "/dev/shm/latest_heat_meter.json"
+SHM_SUMMARY = "/dev/shm/heat_fleet_summary.json"
+SERVICE_NAME = "sdr-heat.service"
+
+def cmd_status():
+    if not os.path.exists(DB_PATH):
+        print("[-] Žádná databáze měřičů topení zatím neexistuje.")
+        print("    Spusťte sběrač pomocí: heat start")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, manufacturer, room_label, last_seen, last_hca, prev_hca, billing_date, total_packets 
+        FROM meters ORDER BY last_seen DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    print("╔═══════════════════════════════════════════════════════════════════════════════════════════════════════╗")
+    print("║ THE OBSERVATOŘ // RADIÁTORY & INDIKÁTORY TOPENÍ (868.95 MHz Wireless M-Bus Mode C&T)                 ║")
+    print("╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝")
+
+    # Check daemon status
+    is_active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", SERVICE_NAME]).returncode == 0
+    status_str = "\033[32m● AKTIVNÍ (démon běží)\033[0m" if is_active else "\033[31m○ NEAKTIVNÍ\033[0m"
+    print(f" Služba sdr-heat: {status_str} | Tuner: RTL-SDR Fitipower FC0013 (t520) | Zisk: 19.7 dB")
+    print("─" * 105)
+
+    if not rows:
+        print(" [!] V databázi zatím není zaznamenán žádný indikátor. Vyčkejte na vysílací interval.")
+        return
+
+    header = f" {'ID MĚŘIČE':<12} │ {'VÝROBCE':<8} │ {'MÍSTNOST / ŠTÍTEK':<26} │ {'DÍLKY':>8} │ {'MINULE':>8} │ {'POSLEDNÍ SIGNÁL':<19} │ {'PKT':>5}"
+    print(header)
+    print("═" * 105)
+
+    total_units = 0.0
+    for r in rows:
+        mid, mfg, label, last_seen, hca, prev_hca, billing_date, pkts = r
+        total_units += (hca or 0.0)
+        lbl = label if label else "—"
+        hca_str = f"{hca:.1f}" if hca is not None else "0.0"
+        prev_str = f"{prev_hca:.1f}" if prev_hca is not None else "0.0"
+        print(f" {mid:<12} │ {mfg:<8} │ {lbl:<26} │ {hca_str:>8} │ {prev_str:>8} │ {last_seen:<19} │ {pkts:>5}")
+
+    print("─" * 105)
+    print(f" Celkem indikátorů: {len(rows)} │ Celková naměřená spotřeba: {total_units:.1f} dílků")
+    print(" Tip: Pro pojmenování radiátoru použijte: heat label <ID> \"Kuchyň okno\"")
+    print()
+
+def cmd_label(args):
+    if len(args) < 2:
+        print("Použití: heat label <ID_MĚŘIČE> <NÁZEV MÍSTNOSTI>")
+        print("Příklad: heat label 18466419 \"Kuchyň velký radiátor\"")
+        return
+
+    meter_id = args[0]
+    label = " ".join(args[1:])
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE meters SET room_label = ? WHERE id = ?", (label, meter_id))
+    if cur.rowcount > 0:
+        conn.commit()
+        print(f"[✓] Indikátor #{meter_id} úspěšně označen jako: '{label}'")
+    else:
+        # Insert placeholder if not seen yet
+        now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("""
+            INSERT INTO meters (id, manufacturer, model, room_label, first_seen, last_seen, last_hca, prev_hca, billing_date, total_packets)
+            VALUES (?, 'UNK', 'HCA', ?, ?, ?, 0.0, 0.0, '', 0)
+        """, (meter_id, label, now_ts, now_ts))
+        conn.commit()
+        print(f"[✓] Vytvořen nový záznam pro #{meter_id} s označením: '{label}'")
+    conn.close()
+
+def cmd_live():
+    print("[*] Spouštím živý odposlech paketů radiátorů na 868.95 MHz (Ctrl+C pro ukončení)...")
+    cmd = ["rtl_433", "-f", "868.95M", "-s", "1200k", "-R", "104", "-g", "19.7", "-F", "json"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pkt = json.loads(line)
+                mid = pkt.get("id", "UNK")
+                mfg = pkt.get("M", "UNK")
+                hca = pkt.get("inst_hca_0", "0.0").strip()
+                t_str = pkt.get("time", "")
+                data_hex = pkt.get("data", "")
+                print(f"[{t_str}] \033[36m#{mid}\033[0m ({mfg}) ➔ dílky: \033[32m{hca}\033[0m │ raw: {data_hex[:24]}...")
+            except json.JSONDecodeError:
+                pass
+    except KeyboardInterrupt:
+        proc.terminate()
+        print("\n[*] Živý odposlech ukončen.")
+
+def cmd_log(n=10):
+    if not os.path.exists(JSONL_PATH):
+        print("[-] Žádný archiv paketů zatím neexistuje.")
+        return
+    cmd = ["tail", "-n", str(n), JSONL_PATH]
+    subprocess.run(cmd)
+
+def cmd_service(action):
+    if action in ["start", "stop", "restart", "status", "enable", "disable"]:
+        subprocess.run(["systemctl", "--user", action, SERVICE_NAME])
+    else:
+        print(f"Neznámá akce služby: {action}")
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ["status", "s"]:
+        cmd_status()
+    elif args[0] in ["label", "l"]:
+        cmd_label(args[1:])
+    elif args[0] in ["live", "watch", "w"]:
+        cmd_live()
+    elif args[0] in ["log", "tail"]:
+        n = int(args[1]) if len(args) > 1 else 10
+        cmd_log(n)
+    elif args[0] in ["json", "summary"]:
+        if os.path.exists(SHM_SUMMARY):
+            with open(SHM_SUMMARY) as f:
+                print(f.read())
+        else:
+            print("{}")
+    elif args[0] in ["start", "stop", "restart", "enable", "disable"]:
+        cmd_service(args[0])
+    else:
+        print("Observatoř Heat Telemetry CLI")
+        print("Použití:")
+        print("  heat status              Zobrazí přehled všech zachycených radiátorů")
+        print("  heat live                Živý streaming příchozích paketů v terminálu")
+        print("  heat label <ID> <NÁZEV>  Pojmenuje radiátor (např. 'Kuchyň')")
+        print("  heat log [N]             Vypíše posledních N surových JSON paketů")
+        print("  heat json                Vypíše agregovaný JSON z /dev/shm")
+        print("  heat start|stop|restart  Ovládání systemd služby")
+
+if __name__ == "__main__":
+    main()
