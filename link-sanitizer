@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# link-sanitizer — Purges surveillance tracking tokens & parasitic telemetry from URLs
+# Part of the Techné zero-bloat toolkit for the small-web & dissident networks.
+# CC0 1.0 Universal / Public Domain. Author: --kof
+
+set -euo pipefail
+
+clean_url() {
+    local raw_url="$1"
+
+    # Strip invisible zero-width spaces (ZWSP, ZWNJ, ZWJ, BOM) & non-breaking spaces
+    local url
+    url=$(printf "%s" "$raw_url" | sed 's/\xc2\xa0/ /g; s/\xe2\x80\x8b//g; s/\xe2\x80\x8c//g; s/\xe2\x80\x8d//g; s/\xef\xbb\xbf//g; s/^[[:space:]]*//; s/[[:space:]]*$//')
+
+    if [[ -z "$url" ]]; then
+        return
+    fi
+
+    # Python one-liner to parse query parameters and strip tracking tokens
+    python3 -c "
+import sys
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
+TRACKING_KEYS = {
+    # UTM & Campaign parameters
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+    # Meta / Facebook / Instagram
+    'fbclid', 'fref', 'igshid',
+    # Google / Alphabet
+    'gclid', 'gclsrc', 'dclid', 'gbraid', 'wbraid',
+    # YouTube tracking
+    'si', 'feature', 'pp',
+    # Twitter / X
+    'ref_src', 'ref_url',
+    # Newsletters / CRM
+    'mc_cid', 'mc_eid', 'vero_id', 'vero_conv', 'wickedid',
+    # TikTok & Bytedance
+    '_r', '_t', 'share_app_name',
+    # Misc telemetry & affiliate bloat
+    'msclkid', 'yclid', 'rb_clickid', 's_kwcid', '_openstat', 'action_object_map',
+    'action_type_map', 'action_ref_map'
+}
+
+for line in sys.stdin:
+    raw = line.strip()
+    if not raw:
+        continue
+    # If raw doesn't have scheme but looks like url, handle gracefully
+    parsed = urlparse(raw)
+    if not parsed.netloc and not raw.startswith('http'):
+        print(raw)
+        continue
+
+    # Filter query parameters
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    filtered = [(k, v) for k, v in query_pairs if k.lower() not in TRACKING_KEYS]
+
+    # Clean query string
+    new_query = urlencode(filtered)
+    cleaned = urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        new_query,
+        parsed.fragment
+    ))
+    # Strip trailing ? if query is now empty
+    if cleaned.endswith('?'):
+        cleaned = cleaned[:-1]
+    print(cleaned)
+" <<< "$url"
+}
+
+if [[ "${1:-}" == "-c" || "${1:-}" == "--clipboard" ]]; then
+    if command -v xclip >/dev/null 2>&1; then
+        clip=$(xclip -selection clipboard -o 2>/dev/null || true)
+        if [[ -n "$clip" ]]; then
+            cleaned=$(clean_url "$clip")
+            printf "%s" "$cleaned" | xclip -selection clipboard -i
+            printf "Sanitized clipboard: %s\n" "$cleaned"
+        fi
+    else
+        echo "Error: xclip not found" >&2
+        exit 1
+    fi
+elif [[ $# -gt 0 ]]; then
+    for arg in "$@"; do
+        clean_url "$arg"
+    done
+else
+    # Process from stdin line by line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        clean_url "$line"
+    done
+fi
