@@ -1,7 +1,8 @@
 #!/bin/zsh
 CONV="9860fe31-3526-48d1-9063-3e58e630faf9"
+CURRENT_HOST="$(hostname)"
 
-if command -v agy >/dev/null 2>&1; then
+if [[ "$CURRENT_HOST" == "boxC" || "$CURRENT_HOST" == "B" ]] && command -v agy >/dev/null 2>&1; then
     exec agy --conversation="$CONV" "$@"
 elif [ -x "$HOME/bin/af" ]; then
     exec "$HOME/bin/af" --conversation="$CONV" "$@"
