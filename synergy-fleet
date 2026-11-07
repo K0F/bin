@@ -6,9 +6,9 @@ cmd="${1:-status}"
 
 ssh_penguin() {
     local remote_cmd="$1"
-    if ssh -o ConnectTimeout=2 kof@192.168.1.105 "$remote_cmd" 2>/dev/null; then
+    if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=accept-new -p 2222 kof@192.168.1.105 "$remote_cmd" 2>/dev/null; then
         return 0
-    elif ssh -o ConnectTimeout=2 -p 2205 kof@boxC "$remote_cmd" 2>/dev/null; then
+    elif ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=accept-new -p 2205 kof@boxC "$remote_cmd" 2>/dev/null; then
         return 0
     fi
     return 1
@@ -57,10 +57,26 @@ case "$cmd" in
         ssh -o ConnectTimeout=2 bazina "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"
 
         echo -n "penguin (Client / Left-Bottom): "
-        ssh_penguin "systemctl --user is-active synergy-client 2>/dev/null" || echo "offline / SSH closed"
+        p_status="$(ssh_penguin "systemctl --user is-active synergy-client 2>/dev/null" || true)"
+        if [ -n "$p_status" ]; then
+            echo "$p_status"
+        else
+            echo "offline / SSH closed"
+        fi
 
         echo -n "boxC (Client / Right): "
         ssh -o ConnectTimeout=2 boxC "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"
+
+        echo -n "android (Client / Phone / Bottom): "
+        if ping -c 1 -W 1 192.168.1.103 >/dev/null 2>&1; then
+            if ss -tnp 2>/dev/null | grep ":24800" | grep "192.168.1.103" >/dev/null 2>&1; then
+                echo "connected to KVM"
+            else
+                echo "online (Wi-Fi), waiting for KVM connection"
+            fi
+        else
+            echo "offline / Wi-Fi disconnected"
+        fi
 
         if systemctl --user is-active synergy-server >/dev/null 2>&1; then
             echo ""
