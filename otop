@@ -4,9 +4,26 @@
 # =============================================================================
 ARCH="$(uname -m)"
 
-# 0. Termux / Android Bionic: prefer local Bionic build first
-if [ -d "/data/data/com.termux" ] && [ -x "$HOME/src/observator/otop/bin/otop" ]; then
-    exec "$HOME/src/observator/otop/bin/otop" "$@"
+# 0. Termux / Android Bionic: prefer local Bionic build first, then prebuilt, then auto-download
+if [ -d "/data/data/com.termux" ] || [ -n "$TERMUX_VERSION" ]; then
+    if [ -x "$HOME/src/observator/otop/bin/otop" ]; then
+        exec "$HOME/src/observator/otop/bin/otop" "$@"
+    fi
+    if [ -x "$HOME/bin/arch/android-$ARCH/otop" ]; then
+        exec "$HOME/bin/arch/android-$ARCH/otop" "$@"
+    fi
+    mkdir -p "$HOME/bin/arch/android-$ARCH"
+    if curl -sfL "https://xn--peek-h6a.com/otop-android-$ARCH" -o "$HOME/bin/arch/android-$ARCH/otop" || \
+       curl -sfL "http://192.168.1.101/otop-android-$ARCH" -o "$HOME/bin/arch/android-$ARCH/otop" || \
+       curl -sfL "http://91.139.118.43/otop-android-$ARCH" -o "$HOME/bin/arch/android-$ARCH/otop"; then
+        chmod +x "$HOME/bin/arch/android-$ARCH/otop"
+        exec "$HOME/bin/arch/android-$ARCH/otop" "$@"
+    fi
+    if command -v btop >/dev/null 2>&1; then
+        exec btop "$@"
+    fi
+    echo "Chyba: otop pro Android ($ARCH) nebyl nalezen a stažení selhalo." >&2
+    exit 1
 fi
 
 # 1. Nativní architektura v ~/bin/arch/$ARCH/otop (glibc Linux)
