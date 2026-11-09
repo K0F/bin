@@ -4,13 +4,13 @@
 # =============================================================================
 ARCH="$(uname -m)"
 
-# 0. Termux / Android Bionic: prefer local Bionic build first, then prebuilt, then auto-download
+# 0. Termux / Android Bionic: prefer prebuilt fleet binary first, then local build, then auto-download
 if [ -d "/data/data/com.termux" ] || [ -n "$TERMUX_VERSION" ]; then
-    if [ -x "$HOME/src/observator/otop/bin/otop" ]; then
-        exec "$HOME/src/observator/otop/bin/otop" "$@"
-    fi
     if [ -x "$HOME/bin/arch/android-$ARCH/otop" ]; then
         exec "$HOME/bin/arch/android-$ARCH/otop" "$@"
+    fi
+    if [ -x "$HOME/src/observator/otop/bin/otop" ]; then
+        exec "$HOME/src/observator/otop/bin/otop" "$@"
     fi
     mkdir -p "$HOME/bin/arch/android-$ARCH"
     if curl -sfL "https://xn--peek-h6a.com/otop-android-$ARCH" -o "$HOME/bin/arch/android-$ARCH/otop" || \
