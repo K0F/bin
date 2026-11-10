@@ -66,7 +66,7 @@ def get_moon_metrics(now=None):
    p_name_cz = phase_cz(pos)
    illum = illumination(pos)
    icon = moon_ascii(pos)
-   lunation_num = int(math.floor(float((now - datetime.datetime(2001, 1, 1)).days) / 29.53058867)) + 300 # relative count
+   lunation_num = 2 # 2. měsíční cyklus Konzdatu
    roundedpos = round(float(pos), 4)
    
    return {
@@ -77,7 +77,8 @@ def get_moon_metrics(now=None):
       "illumination_pct": illum,
       "icon": icon,
       "lunation_est": lunation_num,
-      "summary": f"{icon} {p_name_cz} | Phase: {roundedpos} | Illumination: {illum}%"
+      "lunar_cycle": 2,
+      "summary": f"2. MĚSÍČNÍ CYKLUS | {icon} {p_name_cz} | Phase: {roundedpos} | Illumination: {illum}%"
    }
 
 def main(): 
