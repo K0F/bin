@@ -6,6 +6,12 @@
 #echo Metric time: `/home/kof/bin/metriclock` >> /home/kof/.signature
 #echo Unix epoch  : `date +%s` >> /home/kof/.signature
 
+SHM_SIG="/dev/shm/signature"
+if [ ! -L /home/kof/.signature ]; then
+  rm -f /home/kof/.signature
+  ln -s "$SHM_SIG" /home/kof/.signature
+fi
+
 while true; do
   {
     echo "Kryštof Pešek"
@@ -15,7 +21,7 @@ while true; do
     #echo "Metric time : $(/home/kof/bin/metriclock)"
     echo "Unix epoch  : $(date +%s)"
     echo `/home/kof/src/metricTime/dh | tail -n 2 | head -n 1`
-  } > /home/kof/.signature
+  } > "${SHM_SIG}.tmp" && mv -f "${SHM_SIG}.tmp" "$SHM_SIG"
 
   sleep 1.2
 done

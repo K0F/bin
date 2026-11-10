@@ -1,0 +1,57 @@
+#!/usr/bin/python3
+import socket, time, sys, os
+
+PASS_FILE = os.path.expanduser("~/.config/archer/pass")
+
+def get_pass():
+    with open(PASS_FILE, "r") as f:
+        return f.read().strip()
+
+def send_telnet(cmd, wait=0.5):
+    s = socket.create_connection(("192.168.1.1", 23), timeout=5)
+    s.settimeout(1.0)
+    def recv_all(sock, wait=0.5):
+        end = time.time() + wait
+        buf = b""
+        while time.time() < end:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk: break
+                i = 0; clean = bytearray()
+                while i < len(chunk):
+                    if chunk[i] == 255 and i + 2 < len(chunk):
+                        cmd_b, opt = chunk[i+1], chunk[i+2]
+                        if cmd_b in (251, 252): sock.sendall(bytes([255, 254, opt]))
+                        elif cmd_b in (253, 254): sock.sendall(bytes([255, 252, opt]))
+                        i += 3
+                    else: clean.append(chunk[i]); i += 1
+                buf += bytes(clean)
+            except socket.timeout: break
+        return buf.decode("utf-8", errors="replace")
+
+    recv_all(s, 1.0)
+    s.sendall((get_pass() + "\r\n").encode())
+    recv_all(s, 0.5)
+    s.sendall((cmd + "\r\n").encode())
+    res = recv_all(s, wait)
+    s.close()
+    return res
+
+if __name__ == "__main__":
+    op = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if op == "reboot":
+        print("Triggering hard reboot via Telnet...")
+        send_telnet("dev reboot", 2.0)
+    elif op == "dsl":
+        print(send_telnet("adsl show info", 1.0))
+    elif op == "reconnect":
+        # Using simple subprocess for UPnP SOAP instead of complex socket
+        import subprocess
+        print("Triggering soft reconnect via UPnP...")
+        # Note: This requires standard curl/wget if not using pure python
+        # Keeping it simple for now as planned
+        subprocess.run(["curl", "-s", "-H", "SOAPAction:urn:schemas-upnp-org:service:WANIPConnection:1#ForceTermination", "-d", "<s:Envelope><s:Body><u:ForceTermination xmlns:u='urn:schemas-upnp-org:service:WANIPConnection:1'/></s:Body></s:Envelope>", "http://192.168.1.1:1900/upnp/control/7cf17e3aec09/WANIPConn1"])
+        time.sleep(3)
+        subprocess.run(["curl", "-s", "-H", "SOAPAction:urn:schemas-upnp-org:service:WANIPConnection:1#RequestConnection", "-d", "<s:Envelope><s:Body><u:RequestConnection xmlns:u='urn:schemas-upnp-org:service:WANIPConnection:1'/></s:Body></s:Envelope>", "http://192.168.1.1:1900/upnp/control/7cf17e3aec09/WANIPConn1"])
+    else:
+        print("Usage: archer-ctl [status|reconnect|reboot|dsl]")

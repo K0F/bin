@@ -1,0 +1,36 @@
+#!/usr/bin/python3
+import time, subprocess, sys
+
+ROLE = "primary" if "boxc" in sys.argv else "backup"
+FAIL_LIMIT = 2 if ROLE == "primary" else 6
+COOLDOWN = 600
+
+def check_wan():
+    try:
+        subprocess.check_call(["ping", "-c", "1", "-W", "2", "1.1.1.1"])
+        return True
+    except:
+        return False
+
+def log(msg):
+    with open("/tmp/archer-watchdog.log", "a") as f:
+        f.write(f"{time.ctime()}: {msg}\n")
+    print(f"{time.ctime()}: {msg}")
+
+fails = 0
+while True:
+    if check_wan():
+        fails = 0
+    else:
+        fails += 1
+        log(f"WAN fail count: {fails}")
+        if fails == FAIL_LIMIT:
+            log("Attempting soft reconnect...")
+            subprocess.run(["/home/kof/bin/archer-ctl", "reconnect"])
+            time.sleep(45)
+            if not check_wan():
+                log("Soft reconnect failed, triggering hard reboot...")
+                subprocess.run(["/home/kof/bin/archer-ctl", "reboot"])
+                time.sleep(COOLDOWN)
+                fails = 0
+    time.sleep(20)
