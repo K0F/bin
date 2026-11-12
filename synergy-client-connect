@@ -6,10 +6,9 @@ set -euo pipefail
 
 CLIENT_NAME="${1:-$(hostname -s 2>/dev/null || uname -n)}"
 CANDIDATE_SERVERS=(
-    "192.168.1.100:24800" # t520 Ethernet
-    "192.168.1.102:24800" # t520 WiFi
-    "10.0.0.18:24800"     # t520 Legacy LAN
-    "10.39.9.100:24800"   # t520 WireGuard VPN
+    "192.168.1.103:24800" # t520 Ethernet (enp0s25)
+    "192.168.1.105:24800" # t520 WiFi (wlp3s0)
+    "10.39.10.3:24800"    # t520 WireGuard/VPN (tun0)
 )
 
 find_active_server() {
