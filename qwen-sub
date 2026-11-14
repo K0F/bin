@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""
+qwen-sub — Fast, zero-bloat CLI worker delegating mechanical sub-tasks
+to local Qwen3-8B running on bazina (http://10.0.0.15:8080/v1/chat/completions).
+
+By default, disables Qwen3's slow internal <think> monologue (/no_think)
+so responses arrive 5-10x faster on Radeon RX 5700 XT without burning tokens.
+
+Usage:
+  qwen-sub "Summarize these log lines" < /var/log/syslog
+  qwen-sub -f file.txt "Fix Czech typos and return only corrected text"
+  qwen-sub --json "Return JSON with keys x, y"
+  qwen-sub --think "Solve this step by step"   # explicitly enable thinking
+"""
+
+import sys
+import os
+import re
+import json
+import time
+import urllib.request
+import urllib.error
+import argparse
+
+DEFAULT_HOST = os.environ.get("QWEN_HOST", "http://10.0.0.15:8080")
+ENDPOINT = f"{DEFAULT_HOST.rstrip('/')}/v1/chat/completions"
+
+
+def call_qwen(prompt, system_prompt=None, think=False, temp=0.2, max_tokens=2048, json_mode=False, timeout=120):
+    messages = []
+    sys_msg = system_prompt or "You are a fast, concise technical UNIX assistant. Output only the requested result without filler."
+    if not think:
+        sys_msg = sys_msg.strip() + " /no_think"
+    messages.append({"role": "system", "content": sys_msg})
+
+    user_content = prompt if think else f"{prompt}\n/no_think"
+    messages.append({"role": "user", "content": user_content})
+
+    payload = {
+        "model": "qwen3-8b",
+        "messages": messages,
+        "temperature": temp,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "chat_template_kwargs": {"enable_thinking": bool(think)},
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    req = urllib.request.Request(
+        ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        sys.stderr.write(f"[qwen-sub] Error connecting to {ENDPOINT}: {e}\n")
+        sys.exit(1)
+
+    dt = time.time() - t0
+    content = data["choices"][0]["message"].get("content", "")
+    if not think:
+        # Strip any empty or residual <think>...</think> tags
+        content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
+
+    usage = data.get("usage", {})
+    comp_tokens = usage.get("completion_tokens", 0)
+    tps = comp_tokens / dt if dt > 0 else 0.0
+    return content.strip(), dt, comp_tokens, tps
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Fast local Qwen3-8B sub-task worker on bazina")
+    parser.add_argument("prompt", nargs="*", help="Instruction / prompt for the sub-task")
+    parser.add_argument("-f", "--file", help="Input file to attach to the prompt")
+    parser.add_argument("-s", "--system", help="Custom system prompt")
+    parser.add_argument("--think", action="store_true", help="Enable <think> chain-of-thought (slower)")
+    parser.add_argument("--json", action="store_true", help="Force JSON object output")
+    parser.add_argument("-t", "--temp", type=float, default=0.2, help="Sampling temperature (default: 0.2)")
+    parser.add_argument("-m", "--max-tokens", type=int, default=2048, help="Max output tokens (default: 2048)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print speed/token stats to stderr")
+    args = parser.parse_args()
+
+    prompt_text = " ".join(args.prompt).strip()
+
+    stdin_data = ""
+    if not sys.stdin.isatty():
+        stdin_data = sys.stdin.read().strip()
+
+    file_data = ""
+    if args.file:
+        with open(args.file, "r", encoding="utf-8", errors="replace") as f:
+            file_data = f.read().strip()
+
+    parts = [p for p in (prompt_text, file_data, stdin_data) if p]
+    if not parts:
+        parser.print_help()
+        sys.exit(0)
+
+    full_prompt = "\n\n---\n\n".join(parts)
+    out, dt, tokens, tps = call_qwen(
+        full_prompt,
+        system_prompt=args.system,
+        think=args.think,
+        temp=args.temp,
+        max_tokens=args.max_tokens,
+        json_mode=args.json,
+    )
+
+    if args.verbose:
+        sys.stderr.write(f"[qwen-sub] {tokens} tokens in {dt:.2f}s ({tps:.1f} tok/s)\n")
+
+    print(out)
+
+
+if __name__ == "__main__":
+    main()
