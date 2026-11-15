@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# sazej-clanky — Automatická večerní sazba všech článků a týdeníku The Observatoř Konzdat
+# Spouštěno cronem v 23:55 nebo ručně z libovolného uzlu flotily.
+
+set -euo pipefail
+
+LOCK_FILE="/tmp/sazej-clanky.lock"
+exec 202>"$LOCK_FILE"
+if ! flock -n 202; then
+    echo "[sazej-clanky] Jiný proces sazby již běží, končím."
+    exit 0
+fi
+
+export PATH="/home/kof/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export HOME="/home/kof"
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+
+KONZDAT_DIR="/home/kof/src/konzdat"
+SAMIZDAT_BIN="/home/kof/bin/samizdat"
+REBUILD_CLANKY="$KONZDAT_DIR/lib/rebuild_all_clanky.py"
+LOG_DIR="/home/kof/.local/state/konzdat"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/sazba.log"
+
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+echo "=== Sazba článků zahájena: $TIMESTAMP ===" >> "$LOG_FILE"
+
+cd "$KONZDAT_DIR"
+
+# 1. Pull nejnovějších změn z centrálního repozitáře na boxC
+git pull --rebase origin main >> "$LOG_FILE" 2>&1 || true
+
+# 2. Sazba všech samostatných článků (00..17) v 5 formátech (MD, HTML, TXT, TEX, XeLaTeX PDF)
+if [ -f "$REBUILD_CLANKY" ]; then
+    echo "[*] Přesazuji všechny samostatné články..." >> "$LOG_FILE"
+    python3 "$REBUILD_CLANKY" >> "$LOG_FILE" 2>&1
+fi
+
+# 3. Sazba celého čísla Samizdatu (Log_26_Wxx)
+if [ -x "$SAMIZDAT_BIN" ]; then
+    WEEK_NUM=$(date +%-V)
+    ISSUE_CODE="W$WEEK_NUM"
+    echo "[*] Přesazuji aktuální číslo $ISSUE_CODE..." >> "$LOG_FILE"
+    "$SAMIZDAT_BIN" build "$ISSUE_CODE" >> "$LOG_FILE" 2>&1 || true
+fi
+
+# 4. Verzování a distribuce na boxC (pešek.com/konzdat/)
+git add -A >> "$LOG_FILE" 2>&1 || true
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    COMMIT_MSG="sazba: automatická večerní sazba článků a čísla [$TIMESTAMP]"
+    git commit -m "$COMMIT_MSG" >> "$LOG_FILE" 2>&1 || true
+    git push origin main >> "$LOG_FILE" 2>&1 || true
+    echo "[+] Změny uloženy a odeslány na boxC." >> "$LOG_FILE"
+else
+    echo "[=] Žádné nové změny k odeslání." >> "$LOG_FILE"
+fi
+
+# 5. Flotilový záznam
+if [ -x "/home/kof/bin/now" ]; then
+    /home/kof/bin/now "[KONZDAT/CRON] Automatická večerní sazba článků v 23:55 dokončena" >> "$LOG_FILE" 2>&1 || true
+fi
+if [ -x "/home/kof/bin/dnes" ]; then
+    /home/kof/bin/dnes done "Automatická večerní sazba všech článků v Konzdatu (23:55) úspěšně proběhla" >> "$LOG_FILE" 2>&1 || true
+fi
+
+echo "=== Sazba článků dokončena: $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$LOG_FILE"
