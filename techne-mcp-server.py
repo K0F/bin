@@ -1,3 +1,13 @@
+
+import datetime
+
+def debug_log(msg):
+    try:
+        with open("/tmp/mcp-debug.log", "a", encoding="utf-8") as f:
+            now = datetime.datetime.now().isoformat()
+            f.write(f"[{now}] {msg}\n")
+    except Exception:
+        pass
 #!/usr/bin/env python3
 """
 Techné Safety MCP Server (Model Context Protocol)
@@ -431,6 +441,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        debug_log(f"GET {self.path} headers={dict(self.headers)}")
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         accept = self.headers.get("Accept", "")
@@ -475,6 +486,25 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
 
         # Landing page / Health check
         if path in ["", "/mcp", "/status", "/health"]:
+            if "application/json" in accept and "text/html" not in accept:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_cors_headers()
+                self.end_headers()
+                info = {
+                    "jsonrpc": "2.0",
+                    "status": "online",
+                    "name": "techne-safety-mcp",
+                    "version": "1.0.0",
+                    "protocolVersion": "2024-11-05",
+                    "endpoints": {
+                        "sse": f"{BASE_URL}/sse",
+                        "messages": f"{BASE_URL}/messages",
+                        "jsonrpc": f"{BASE_URL}/"
+                    }
+                }
+                self.wfile.write(json.dumps(info, ensure_ascii=False).encode("utf-8"))
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_cors_headers()
@@ -575,6 +605,7 @@ a {{ color: #569cd6; }}
         self.wfile.write(b"Not Found")
 
     def do_POST(self):
+        debug_log(f"POST {self.path} headers={dict(self.headers)}")
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         query = parse_qs(parsed.query)
@@ -605,10 +636,15 @@ a {{ color: #569cd6; }}
         if session_id and session_id in sessions:
             if resp_data is not None:
                 sessions[session_id].put(resp_data)
-            self.send_response(202)
+            # Return 200 OK with valid JSON-RPC payload so clients parsing JSON never crash
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_cors_headers()
             self.end_headers()
-            self.wfile.write(b"Accepted")
+            if resp_data is not None:
+                self.wfile.write(json.dumps(resp_data, ensure_ascii=False).encode("utf-8"))
+            else:
+                self.wfile.write(b"{}")
             return
 
         # Direct JSON-RPC response (for non-SSE or direct POST)
