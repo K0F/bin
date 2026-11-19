@@ -130,41 +130,51 @@ def process_packet(pkt):
     billing_date = pkt.get("inst_date_17", "")
     
     # Try parsing current consumption
-    last_hca = 0.0
-    try:
-        last_hca = float(pkt.get("inst_hca_0", "0.0").strip())
-    except (ValueError, TypeError):
-        pass
+    has_hca = "inst_hca_0" in pkt
+    last_hca = None
+    if has_hca:
+        try:
+            last_hca = float(pkt["inst_hca_0"].strip())
+        except (ValueError, TypeError):
+            has_hca = False
 
     # Try parsing previous billing period
-    prev_hca = 0.0
-    try:
-        prev_hca = float(pkt.get("inst_hca_17", "0.0").strip())
-    except (ValueError, TypeError):
-        pass
+    has_prev = "inst_hca_17" in pkt
+    prev_hca = None
+    if has_prev:
+        try:
+            prev_hca = float(pkt["inst_hca_17"].strip())
+        except (ValueError, TypeError):
+            has_prev = False
 
     # 1. Update SQLite DB
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT id, total_packets FROM meters WHERE id = ?", (meter_id,))
+    cur.execute("SELECT id, total_packets, last_hca, prev_hca, billing_date FROM meters WHERE id = ?", (meter_id,))
     row = cur.fetchone()
     if row:
         pkts = row[1] + 1
+        final_hca = last_hca if has_hca else row[2]
+        final_prev = prev_hca if has_prev else row[3]
+        final_bdate = billing_date if billing_date else row[4]
         cur.execute("""
             UPDATE meters 
             SET last_seen = ?, last_hca = ?, prev_hca = ?, billing_date = ?, total_packets = ?
             WHERE id = ?
-        """, (now_ts, last_hca, prev_hca, billing_date, pkts, meter_id))
+        """, (now_ts, final_hca, final_prev, final_bdate, pkts, meter_id))
     else:
+        final_hca = last_hca if has_hca else 0.0
+        final_prev = prev_hca if has_prev else 0.0
         cur.execute("""
             INSERT INTO meters (id, manufacturer, model, first_seen, last_seen, last_hca, prev_hca, billing_date, total_packets)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        """, (meter_id, mfg, pkt.get("type_string", "HCA"), now_ts, now_ts, last_hca, prev_hca, billing_date))
+        """, (meter_id, mfg, pkt.get("type_string", "HCA"), now_ts, now_ts, final_hca, final_prev, billing_date))
     
-    cur.execute("""
-        INSERT INTO readings (id, timestamp, hca_val, hca_prev, billing_date, raw_hex)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (meter_id, now_ts, last_hca, prev_hca, billing_date, data_hex))
+    if has_hca and last_hca is not None:
+        cur.execute("""
+            INSERT INTO readings (id, timestamp, hca_val, hca_prev, billing_date, raw_hex)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (meter_id, now_ts, last_hca, prev_hca if prev_hca is not None else 0.0, billing_date, data_hex))
     conn.commit()
 
     # 2. Update SHM summary and latest

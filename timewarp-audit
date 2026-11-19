@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""
+timewarp-audit — Live Linux Time-Rollback Forensic Auditor & Simulator
+Detects files, journals, locks, build artifacts, databases, and tunnels that
+break when CLOCK_REALTIME jumps backward (e.g. -3600s / 1 hour).
+"""
+
+import os
+import sys
+import time
+import json
+import stat
+import argparse
+import subprocess
+
+CATEGORIES = {
+    "CRITICAL_CRYPTO_AUTH": {
+        "title": "1. CRITICAL: Kryptografie, autentizace & tunely (sudo, WireGuard, TLS)",
+        "impact": "Zahození paketů (TAI64N replay), zneplatnění sudo tokenů, neplatné čerstvé certifikáty",
+    },
+    "HIGH_BUILD_CODE": {
+        "title": "2. HIGH: Překladače, sestavení & zdrojové kódy (make, ninja, gcc, .pyc)",
+        "impact": "Clock skew warning, nekonečné překompilování cílů s mtime v budoucnosti",
+    },
+    "HIGH_SYNC_MAIL": {
+        "title": "3. HIGH: Synchronizace, pošta & verzování (Syncthing, Git, Postfix, Dovecot)",
+        "impact": "Syncthing .sync-conflict, zamrznutí fronty Postfixu o 1h, Dovecot index desync",
+    },
+    "MEDIUM_JOURNALS_TIMERS": {
+        "title": "4. MEDIUM: Žurnály, logy & časovače (journald, cron, systemd timers, wtmp)",
+        "impact": "Nucená rotace .journal~, zamrznutí cronu/timerů po dobu 1h, záporné časy v wtmp",
+    },
+    "MEDIUM_SHM_TELEMETRY": {
+        "title": "5. MEDIUM: Živá telemetrie v RAM (/dev/shm, /run, ring buffery)",
+        "impact": "Záporné stáří dat (-3590s), smyčka v časových řadách 50Hz sítě a senzorů",
+    },
+    "LOW_APP_STATE": {
+        "title": "6. LOW: Databáze (SQLite WAL), cache a běžné aplikační soubory",
+        "impact": "Zpřeházené ORDER BY timestamp záznamy, zneplatnění cache",
+    },
+}
+
+
+def classify_path(path):
+    p = path.lower()
+    if any(x in p for x in ["/run/sudo", "/etc/wireguard", "/etc/letsencrypt", "openvpn", ".gnupg", "ssh"]):
+        return "CRITICAL_CRYPTO_AUTH"
+    if any(p.endswith(ext) for ext in [".c", ".cpp", ".h", ".hpp", ".o", ".a", ".so", ".pyc", ".tex", ".pas"]) or \
+       any(x in os.path.basename(p) for x in ["makefile", "cmakelists.txt", "build.ninja", "compile_commands.json"]):
+        return "HIGH_BUILD_CODE"
+    if any(x in p for x in ["syncthing", "/maildir", "/var/spool/postfix", "/var/mail", ".git/", "/dnes/", "/now/"]):
+        return "HIGH_SYNC_MAIL"
+    if any(x in p for x in ["/var/log/journal", "/var/lib/systemd/timers", "/var/spool/cron", "/var/log/wtmp",
+                            "/var/log/btmp", "/run/utmp", "/var/log/syslog", "/var/log/messages"]):
+        return "MEDIUM_JOURNALS_TIMERS"
+    if p.startswith("/dev/shm/") or p.startswith("/run/"):
+        return "MEDIUM_SHM_TELEMETRY"
+    return "LOW_APP_STATE"
+
+
+def scan_paths(roots, ref_time, max_files=20000):
+    results = {k: [] for k in CATEGORIES}
+    scanned = 0
+    seen_inodes = set()
+
+    skip_Prefixes = ("/proc", "/sys", "/dev/pts", "/dev/fd", "/home/kof/.gemini/antigravity-cli")
+
+    for root in roots:
+        if not os.path.exists(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            if dirpath.startswith(skip_Prefixes):
+                dirnames[:] = []
+                continue
+            # Prune heavy third-party caches
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in ("node_modules", ".venv", "venv", "target", "Cache", "Code Cache", "GPUCache")
+            ]
+            for fn in filenames:
+                if scanned >= max_files:
+                    break
+                full = os.path.join(dirpath, fn)
+                try:
+                    st = os.lstat(full)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                key = (st.st_dev, st.st_ino)
+                if key in seen_inodes:
+                    continue
+                seen_inodes.add(key)
+                scanned += 1
+
+                delta = st.st_mtime - ref_time
+                if delta > 0:
+                    cat = classify_path(full)
+                    results[cat].append({
+                        "path": full,
+                        "mtime": st.st_mtime,
+                        "future_sec": round(delta, 1),
+                        "size": st.st_size,
+                    })
+    for cat in results:
+        results[cat].sort(key=lambda x: (-x["future_sec"], x["path"]))
+    return results, scanned
+
+
+def check_live_subsystems():
+    notes = []
+    # Check WireGuard / OpenVPN
+    try:
+        out = subprocess.check_output(["ip", "-br", "link"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            if any(k in line for k in ("wg", "tun", "tap")):
+                notes.append(f"Aktivní tunel: {line.strip()} (WireGuard používá TAI64N timestamp -> skok zpět zastaví handshake!)")
+    except Exception:
+        pass
+    # Check NTP
+    try:
+        out = subprocess.check_output(["timedatectl", "show"], text=True, stderr=subprocess.DEVNULL)
+        if "NTPSynchronized=yes" in out:
+            notes.append("NTP synchronizace je AKTIVNÍ (systemd-timesyncd/chronyd by skok o -1h okamžitě opravil zpět, pokud se nevypne).")
+    except Exception:
+        pass
+    return notes
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Audit/simulate Linux clock rollback anomalies")
+    parser.add_argument("mode", nargs="?", default="simulate", choices=["simulate", "live", "fleet"],
+                        help="'simulate' shifts reference time by -minutes; 'live' checks actual mtime > time.time() inside sandbox")
+    parser.add_argument("--minutes", "-m", type=float, default=60.0, help="Minutes to roll back in simulate mode (default: 60)")
+    parser.add_argument("--root", action="append", help="Custom directories to scan")
+    parser.add_argument("--top", type=int, default=8, help="Max items shown per category")
+    parser.add_argument("--json", action="store_true", help="Output JSON")
+    args = parser.parse_args()
+
+    if args.mode == "fleet":
+        for host in ["t520", "bazina", "boxC"]:
+            print(f"\n{'='*76}\n  UZEL: {host}\n{'='*76}")
+            if host == "t520":
+                subprocess.run([sys.executable, __file__, "simulate", "-m", str(args.minutes), "--top", "5"])
+            else:
+                subprocess.run(["ssh", host, "python3 - -m " + str(args.minutes) + " --top 5"],
+                               input=open(__file__, "rb").read())
+        return
+
+    now = time.time()
+    offset_file = "/run/timewarp.offset"
+    sandbox_offset = 0
+    if os.path.exists(offset_file):
+        try:
+            with open(offset_file, "r") as f:
+                sandbox_offset = int(f.read().strip() or "0")
+        except Exception:
+            pass
+
+    if args.mode == "live":
+        ref_time = now
+        desc = f"LIVE SANDBOX AUDIT (aktuální virtuální čas: {time.ctime(now)}, offset={sandbox_offset}s)"
+    else:
+        ref_time = now - (args.minutes * 60.0)
+        desc = f"SIMULACE NÁVRATU O -{int(args.minutes)} MINUT (cílový čas: {time.ctime(ref_time)})"
+
+    roots = args.root if args.root else [
+        "/run",
+        "/dev/shm",
+        "/var/log",
+        "/var/lib/systemd/timers",
+        "/var/spool",
+        "/tmp/lab",
+        os.path.expanduser("~/src"),
+        os.path.expanduser("~/.local/state/syncthing"),
+        os.path.expanduser("~/Maildir"),
+    ]
+
+    results, scanned = scan_paths(roots, ref_time)
+    total_anomalies = sum(len(v) for v in results.values())
+    subsystems = check_live_subsystems()
+
+    if args.json:
+        print(json.dumps({
+            "mode": args.mode,
+            "reference_time": ref_time,
+            "scanned_files": scanned,
+            "total_future_files": total_anomalies,
+            "subsystems": subsystems,
+            "categories": results,
+        }, indent=2))
+        return
+
+    print(f"╔{'═'*74}╗")
+    print(f"║ {desc:<72} ║")
+    print(f"╚{'═'*74}╝")
+    print(f"Prohledáno souborů : {scanned}")
+    print(f"Souborů v budoucnu : {total_anomalies} (mtime > {time.strftime('%H:%M:%S', time.localtime(ref_time))})")
+    if subsystems:
+        print("\n[!] Detekované živé subsystémy citlivé na čas:")
+        for s in subsystems:
+            print(f"    • {s}")
+
+    for key, meta in CATEGORIES.items():
+        items = results[key]
+        print(f"\n── {meta['title']} [{len(items)} souborů] ──")
+        print(f"   Dopad: {meta['impact']}")
+        if not items:
+            print("   (žádné konfliktní soubory v tomto okně)")
+            continue
+        for item in items[:args.top]:
+            print(f"   [+{item['future_sec']:>6.0f}s] {item['path']} ({item['size']} B)")
+        if len(items) > args.top:
+            print(f"   ... a dalších {len(items) - args.top} souborů.")
+
+
+if __name__ == "__main__":
+    main()

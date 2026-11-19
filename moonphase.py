@@ -58,6 +58,14 @@ def moon_ascii(pos):
    icons = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
    return icons[index]
 
+def lunation_number(now=None):
+   """Synodické číslo lunace dle Meeuse: k = 0 → novoluní 6. 1. 2000."""
+   if now is None:
+      now = datetime.datetime.now()
+   jd = now.timestamp() / 86400.0 + 2440587.5
+   k = (jd - 2451550.09766) / 29.530588861
+   return int(math.floor(k))
+
 def get_moon_metrics(now=None):
    if now is None:
       now = datetime.datetime.now()
@@ -66,7 +74,7 @@ def get_moon_metrics(now=None):
    p_name_cz = phase_cz(pos)
    illum = illumination(pos)
    icon = moon_ascii(pos)
-   lunation_num = 2 # 2. měsíční cyklus Konzdatu
+   lunation_num = lunation_number(now)
    roundedpos = round(float(pos), 4)
    
    return {
@@ -77,8 +85,8 @@ def get_moon_metrics(now=None):
       "illumination_pct": illum,
       "icon": icon,
       "lunation_est": lunation_num,
-      "lunar_cycle": 2,
-      "summary": f"2. MĚSÍČNÍ CYKLUS | {icon} {p_name_cz} | Phase: {roundedpos} | Illumination: {illum}%"
+      "lunar_cycle": lunation_num,
+      "summary": f"{lunation_num}. SYNODICKÁ LUNACE | {icon} {p_name_cz} | Phase: {roundedpos} | Illumination: {illum}%"
    }
 
 def main(): 

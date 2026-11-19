@@ -1,34 +1,95 @@
 #!/usr/bin/python3
-import time, subprocess, sys
+import time
+import subprocess
+import sys
+import json
 
 ROLE = "primary" if "boxc" in sys.argv else "backup"
-FAIL_LIMIT = 2 if ROLE == "primary" else 6
+# Archer VR400 VDSL2 natural re-sync takes ~98s + ~12s PPPoE (~110s total).
+# Never reboot before 160s (primary) / 360s (backup) so natural VDSL re-syncs
+# finish without dropping LAN/Wi-Fi, and backup never double-reboots after primary!
+FAIL_LIMIT = 8 if ROLE == "primary" else 18
 COOLDOWN = 600
+PING_TARGETS = ["1.1.1.1", "8.8.8.8", "89.24.145.107"]
+
 
 def check_wan():
+    for target in PING_TARGETS:
+        try:
+            subprocess.check_call(
+                ["ping", "-c", "1", "-W", "2", target],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def get_router_status():
     try:
-        subprocess.check_call(["ping", "-c", "1", "-W", "2", "1.1.1.1"])
-        return True
-    except:
-        return False
+        out = subprocess.check_output(
+            ["/home/kof/bin/archer-ctl", "status", "--json"],
+            timeout=8,
+            stderr=subprocess.DEVNULL,
+        )
+        return json.loads(out.decode("utf-8"))
+    except Exception:
+        return None
+
 
 def log(msg):
-    with open("/tmp/archer-watchdog.log", "a") as f:
-        f.write(f"{time.ctime()}: {msg}\n")
-    print(f"{time.ctime()}: {msg}")
+    line = f"{time.ctime()} [{ROLE}]: {msg}"
+    try:
+        with open("/tmp/archer-watchdog.log", "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+    print(line, flush=True)
+
 
 fails = 0
+log(f"Started archer-watchdog ({ROLE}, fail_limit={FAIL_LIMIT}x20s={FAIL_LIMIT*20}s)")
+
 while True:
     if check_wan():
+        if fails > 0:
+            log(f"WAN restored after {fails} failed checks ({fails*20}s)")
         fails = 0
     else:
         fails += 1
-        log(f"WAN fail count: {fails}")
-        if fails == FAIL_LIMIT:
-            log("Attempting soft reconnect...")
+        log(f"WAN fail count: {fails}/{FAIL_LIMIT}")
+        if fails >= FAIL_LIMIT:
+            st = get_router_status()
+            if st is not None:
+                dsl_up = st.get("dsl_uptime_s", 0)
+                dsl_st = st.get("dsl_status", "Unknown")
+                log(f"Router telemetry before action: dsl_status={dsl_st}, dsl_uptime={dsl_up}s, ppp={st.get('ppp_status')}")
+                # If DSL just synced recently (< 90s ago) or backup sees primary already rebooted/resynced (< 240s)
+                if (ROLE == "primary" and 0 < dsl_up < 60) or (ROLE == "backup" and 0 < dsl_up < 240):
+                    log(f"DSL recently came up ({dsl_up}s ago); waiting for PPPoE instead of rebooting.")
+                    time.sleep(30)
+                    if check_wan():
+                        log("WAN restored without reboot.")
+                        fails = 0
+                        continue
+
+            log("Attempting soft PPPoE reconnect...")
             subprocess.run(["/home/kof/bin/archer-ctl", "reconnect"])
             time.sleep(45)
-            if not check_wan():
+            if check_wan():
+                log("WAN restored after soft reconnect.")
+                fails = 0
+            else:
+                st2 = get_router_status()
+                if st2 is not None and 0 < st2.get("dsl_uptime_s", 0) < 90:
+                    log(f"DSL just synced ({st2.get('dsl_uptime_s')}s); giving PPPoE 30s more before hard reboot...")
+                    time.sleep(30)
+                    if check_wan():
+                        log("WAN restored after extra PPPoE wait.")
+                        fails = 0
+                        continue
                 log("Soft reconnect failed, triggering hard reboot...")
                 subprocess.run(["/home/kof/bin/archer-ctl", "reboot"])
                 time.sleep(COOLDOWN)

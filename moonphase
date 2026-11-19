@@ -62,7 +62,8 @@ def lunation_number(now=None):
       now = datetime.datetime.now()
    jd = now.timestamp() / 86400.0 + 2440587.5
    k = (jd - 2451550.09766) / 29.530588861
-   return int(k // 1)
+   return int(math.floor(k))
+
 
 def get_moon_metrics(now=None):
    if now is None:

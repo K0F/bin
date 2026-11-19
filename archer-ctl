@@ -1,57 +1,135 @@
 #!/usr/bin/python3
-import socket, time, sys, os
+import socket
+import time
+import sys
+import os
+import re
+import json
+import subprocess
 
 PASS_FILE = os.path.expanduser("~/.config/archer/pass")
+ROUTER_IP = "192.168.1.1"
+
 
 def get_pass():
     with open(PASS_FILE, "r") as f:
         return f.read().strip()
 
-def send_telnet(cmd, wait=0.5):
-    s = socket.create_connection(("192.168.1.1", 23), timeout=5)
+
+def send_telnet(cmds, wait=0.8):
+    if isinstance(cmds, str):
+        cmds = [cmds]
+    s = socket.create_connection((ROUTER_IP, 23), timeout=5)
     s.settimeout(1.0)
-    def recv_all(sock, wait=0.5):
-        end = time.time() + wait
+
+    def recv_all(sock, w=0.5):
+        end = time.time() + w
         buf = b""
         while time.time() < end:
             try:
                 chunk = sock.recv(4096)
-                if not chunk: break
-                i = 0; clean = bytearray()
+                if not chunk:
+                    break
+                i = 0
+                clean = bytearray()
                 while i < len(chunk):
                     if chunk[i] == 255 and i + 2 < len(chunk):
-                        cmd_b, opt = chunk[i+1], chunk[i+2]
-                        if cmd_b in (251, 252): sock.sendall(bytes([255, 254, opt]))
-                        elif cmd_b in (253, 254): sock.sendall(bytes([255, 252, opt]))
+                        cmd_b, opt = chunk[i + 1], chunk[i + 2]
+                        if cmd_b in (251, 252):
+                            sock.sendall(bytes([255, 254, opt]))
+                        elif cmd_b in (253, 254):
+                            sock.sendall(bytes([255, 252, opt]))
                         i += 3
-                    else: clean.append(chunk[i]); i += 1
+                    else:
+                        clean.append(chunk[i])
+                        i += 1
                 buf += bytes(clean)
-            except socket.timeout: break
+            except socket.timeout:
+                break
         return buf.decode("utf-8", errors="replace")
 
-    recv_all(s, 1.0)
+    recv_all(s, 0.8)
     s.sendall((get_pass() + "\r\n").encode())
     recv_all(s, 0.5)
-    s.sendall((cmd + "\r\n").encode())
-    res = recv_all(s, wait)
+    out = []
+    for c in cmds:
+        s.sendall((c + "\r\n").encode())
+        out.append(recv_all(s, wait))
     s.close()
-    return res
+    return "\n".join(out)
+
+
+def parse_kv(raw):
+    data = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if "=" in line and not line.startswith("cmd:"):
+            k, v = line.split("=", 1)
+            data[k.strip()] = v.strip()
+    return data
+
+
+def get_status_dict():
+    raw = send_telnet(["adsl show info", "wan show connection info"], wait=0.8)
+    kv = parse_kv(raw)
+    status = {
+        "dsl_status": kv.get("status", "Unknown"),
+        "modulation": kv.get("modulationType", ""),
+        "dsl_uptime_s": int(kv.get("X_TP_UpTime", "0") or 0),
+        "dsl_sync_duration_s": int(kv.get("X_TP_LastUpMoment", "0") or 0),
+        "down_curr_kbps": int(kv.get("downstreamCurrRate", "0") or 0),
+        "up_curr_kbps": int(kv.get("upstreamCurrRate", "0") or 0),
+        "down_max_kbps": int(kv.get("downstreamMaxRate", "0") or 0),
+        "up_max_kbps": int(kv.get("upstreamMaxRate", "0") or 0),
+        "snr_down_db": int(kv.get("downstreamNoiseMargin", "0") or 0) / 10.0,
+        "snr_up_db": int(kv.get("upstreamNoiseMargin", "0") or 0) / 10.0,
+        "att_down_db": int(kv.get("downstreamAttenuation", "0") or 0) / 10.0,
+        "att_up_db": int(kv.get("upstreamAttenuation", "0") or 0) / 10.0,
+        "sra": kv.get("X_TP_SRA", "Unknown"),
+        "bitswap": kv.get("X_TP_Bitswap", "Unknown"),
+        "ppp_status": kv.get("connectionStatus", "Unknown"),
+        "ppp_uptime_s": int(kv.get("uptime", "0") or 0),
+        "external_ip": kv.get("externalIPAddress", "0.0.0.0"),
+        "gateway": kv.get("defaultGateway", "0.0.0.0"),
+    }
+    return status
+
 
 if __name__ == "__main__":
     op = sys.argv[1] if len(sys.argv) > 1 else "status"
-    if op == "reboot":
+    if op == "status":
+        st = get_status_dict()
+        if "--json" in sys.argv:
+            print(json.dumps(st, indent=2))
+        else:
+            print(f"DSL Status : {st['dsl_status']} ({st['modulation']}, SRA={st['sra']}, Bitswap={st['bitswap']})")
+            print(f"DSL Uptime : {st['dsl_uptime_s']}s (last training took {st['dsl_sync_duration_s']}s)")
+            print(f"Rates      : Down {st['down_curr_kbps']}/{st['down_max_kbps']} kbps | Up {st['up_curr_kbps']}/{st['up_max_kbps']} kbps")
+            print(f"SNR Margin : Down {st['snr_down_db']:.1f} dB | Up {st['snr_up_db']:.1f} dB (Atten: {st['att_down_db']:.1f} / {st['att_up_db']:.1f} dB)")
+            print(f"PPPoE WAN  : {st['ppp_status']} (Uptime: {st['ppp_uptime_s']}s) | IP: {st['external_ip']} | GW: {st['gateway']}")
+    elif op == "reboot":
         print("Triggering hard reboot via Telnet...")
         send_telnet("dev reboot", 2.0)
     elif op == "dsl":
         print(send_telnet("adsl show info", 1.0))
     elif op == "reconnect":
-        # Using simple subprocess for UPnP SOAP instead of complex socket
-        import subprocess
-        print("Triggering soft reconnect via UPnP...")
-        # Note: This requires standard curl/wget if not using pure python
-        # Keeping it simple for now as planned
-        subprocess.run(["curl", "-s", "-H", "SOAPAction:urn:schemas-upnp-org:service:WANIPConnection:1#ForceTermination", "-d", "<s:Envelope><s:Body><u:ForceTermination xmlns:u='urn:schemas-upnp-org:service:WANIPConnection:1'/></s:Body></s:Envelope>", "http://192.168.1.1:1900/upnp/control/7cf17e3aec09/WANIPConn1"])
+        print("Triggering soft PPPoE reconnect via Telnet + UPnP...")
+        try:
+            send_telnet("wan set service pppoe_ptm_848_0_d --protocol pppoe", 1.0)
+        except Exception as e:
+            print(f"Telnet reconnect note: {e}")
+        subprocess.run([
+            "curl", "-m", "3", "-s",
+            "-H", "SOAPAction:urn:schemas-upnp-org:service:WANIPConnection:1#ForceTermination",
+            "-d", "<s:Envelope><s:Body><u:ForceTermination xmlns:u='urn:schemas-upnp-org:service:WANIPConnection:1'/></s:Body></s:Envelope>",
+            "http://192.168.1.1:1900/upnp/control/7cf17e3aec09/WANIPConn1"
+        ])
         time.sleep(3)
-        subprocess.run(["curl", "-s", "-H", "SOAPAction:urn:schemas-upnp-org:service:WANIPConnection:1#RequestConnection", "-d", "<s:Envelope><s:Body><u:RequestConnection xmlns:u='urn:schemas-upnp-org:service:WANIPConnection:1'/></s:Body></s:Envelope>", "http://192.168.1.1:1900/upnp/control/7cf17e3aec09/WANIPConn1"])
+        subprocess.run([
+            "curl", "-m", "3", "-s",
+            "-H", "SOAPAction:urn:schemas-upnp-org:service:WANIPConnection:1#RequestConnection",
+            "-d", "<s:Envelope><s:Body><u:RequestConnection xmlns:u='urn:schemas-upnp-org:service:WANIPConnection:1'/></s:Body></s:Envelope>",
+            "http://192.168.1.1:1900/upnp/control/7cf17e3aec09/WANIPConn1"
+        ])
     else:
-        print("Usage: archer-ctl [status|reconnect|reboot|dsl]")
+        print("Usage: archer-ctl [status [--json]|reconnect|reboot|dsl]")

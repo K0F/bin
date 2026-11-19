@@ -12,7 +12,7 @@ import http.server
 import threading
 import time
 
-RENDERER_IP = os.environ.get("RENDERER_IP", "192.168.1.107")
+RENDERER_IP = os.environ.get("RENDERER_IP", "192.168.1.100")
 RENDERER_PORT = int(os.environ.get("RENDERER_PORT", "54321"))
 ANDROID_IP = os.environ.get("ANDROID_IP", "192.168.1.103")
 ANDROID_SSH_PORT = os.environ.get("ANDROID_SSH_PORT", "8022")
@@ -40,10 +40,11 @@ def get_local_ip(target_ip):
         s.close()
         return ip
     except Exception:
-        return "192.168.1.103" if is_running_on_android() else "192.168.1.100"
+        return "192.168.1.103" if is_running_on_android() else "192.168.1.106"
 
 LOCAL_IP = get_local_ip(RENDERER_IP)
 CONTROL_URL = f"http://{RENDERER_IP}:{RENDERER_PORT}/_urn:schemas-upnp-org:service:AVTransport_control"
+RENDERING_URL = f"http://{RENDERER_IP}:{RENDERER_PORT}/_urn:schemas-upnp-org:service:RenderingControl_control"
 
 def is_tcp_open(ip, port, timeout=1.5):
     try:
@@ -83,6 +84,67 @@ def send_soap(action, body_xml):
         print(f"Error executing {action}: {e}")
         return None
 
+def send_rendering_soap(action, body_xml):
+    if not is_renderer_online(RENDERER_IP, RENDERER_PORT):
+        print(f"[cast-gxbox] Upozornění: Port {RENDERER_PORT} na {RENDERER_IP} zatím neodpovídá.")
+        print(f"[cast-gxbox] Zapněte na set-top boxu DLNA DMR: Menu -> Aplikace / Síť -> DLNA DMR.")
+        return None
+    soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+<s:Body>
+<u:{action} xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+{body_xml}
+</u:{action}>
+</s:Body>
+</s:Envelope>"""
+    headers = {
+        "SOAPAction": f"\"urn:schemas-upnp-org:service:RenderingControl:1#{action}\"",
+        "Content-Type": "text/xml; charset=\"utf-8\""
+    }
+    req = urllib.request.Request(RENDERING_URL, data=soap.encode("utf-8"), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.read().decode("utf-8")
+    except Exception as e:
+        print(f"Error executing {action}: {e}")
+        return None
+
+def set_volume(vol):
+    vol = max(0, min(100, int(vol)))
+    print(f"Setting volume on TESLA TE-300 to {vol}%...")
+    body = f"<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>{vol}</DesiredVolume>"
+    res = send_rendering_soap("SetVolume", body)
+    if res is not None:
+        print(f"Volume set to {vol}%.")
+
+def get_volume():
+    body = "<InstanceID>0</InstanceID><Channel>Master</Channel>"
+    res = send_rendering_soap("GetVolume", body)
+    if res:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(res)
+        for cur in root.iter("CurrentVolume"):
+            return cur.text
+    return None
+
+def set_mute(mute_state):
+    val = "1" if mute_state in (True, 1, "1", "on", "true", "yes") else "0"
+    state_str = "MUTED" if val == "1" else "UNMUTED"
+    print(f"Setting mute on TESLA TE-300: {state_str}...")
+    body = f"<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredMute>{val}</DesiredMute>"
+    res = send_rendering_soap("SetMute", body)
+    if res is not None:
+        print(f"Audio {state_str}.")
+
+def scan_box():
+    print(f"Scanning TESLA TE-300 ({RENDERER_IP})...")
+    common_ports = [21, 22, 23, 80, 554, 8080, 9999, 54321]
+    for p in common_ports:
+        open_st = is_tcp_open(RENDERER_IP, p, timeout=0.8)
+        svc = {21: "FTP", 22: "SSH", 23: "Telnet", 80: "HTTP", 554: "RTSP", 8080: "HTTP-Alt", 9999: "MeeCast/GX", 54321: "DLNA DMR"}.get(p, "unknown")
+        status_str = "OPEN" if open_st else "closed"
+        print(f"  Port {p:5d}/tcp ({svc:12s}): {status_str}")
+
 def cast_url(url):
     print(f"Casting to TESLA TE-300 ({RENDERER_IP}:{RENDERER_PORT})...")
     print(f"Media URL: {url}")
@@ -106,6 +168,10 @@ def status():
     online = is_renderer_online(RENDERER_IP, RENDERER_PORT)
     print(f"Renderer: {RENDERER_IP}:{RENDERER_PORT} ({'ONLINE' if online else 'OFFLINE - enable DLNA DMR on TV'})")
     print(f"Local IP: {LOCAL_IP}:{LOCAL_STREAM_PORT}")
+    if online:
+        v = get_volume()
+        if v is not None:
+            print(f"Current Volume: {v}%")
     if is_running_on_android():
         newest = find_latest_android_recording()
         print(f"Latest Android Screen Recording: {newest or 'none'}")
@@ -469,8 +535,11 @@ def print_help(prog):
         print("  android-cast status       Show TESLA TE-300 DLNA DMR status and latest Android recording")
         print("  android-cast stop         Stop playback on TESLA TE-300")
     else:
-        print(f"Usage: {prog} <file | url | android [live|latest|watch] | desktop | stop | pause | status>")
+        print(f"Usage: {prog} <file | url | vol [0-100] | mute [on|off] | scan | android [live|latest|watch] | desktop | stop | pause | status>")
         print("\nExamples:")
+        print(f"  {prog} vol 50                                   (Set TV volume to 50%)")
+        print(f"  {prog} mute on                                  (Mute audio)")
+        print(f"  {prog} scan                                     (Scan open network ports on TV box)")
         print(f"  {prog} android                                  (Cast Android screencast to TESLA TE-300)")
         print(f"  {prog} android watch                            (Auto-cast new Android screen recordings)")
         print(f"  {prog} desktop                                  (Live X11 desktop -> HLS -> TESLA TE-300)")
@@ -521,6 +590,17 @@ def main():
         pause()
     elif arg == "status":
         status()
+    elif arg == "scan":
+        scan_box()
+    elif arg in ("vol", "volume"):
+        if len(sys.argv) > 2:
+            set_volume(sys.argv[2])
+        else:
+            v = get_volume()
+            print(f"Current Volume: {v}%" if v else "Could not get volume.")
+    elif arg == "mute":
+        sub = sys.argv[2] if len(sys.argv) > 2 else "on"
+        set_mute(sub)
     elif arg == "android":
         sub = sys.argv[2] if len(sys.argv) > 2 else None
         cast_android(sub)

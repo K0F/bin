@@ -12,9 +12,7 @@ REMOTE_HOST = os.environ.get("DRKOTA_HOST", "t520")
 
 
 def forward_to_t520_if_needed():
-    """If /dev/ttyUSB0 is not local and we are not on t520, forward command to t520."""
-    if os.path.exists(PORT):
-        return
+    """If we are not on t520, forward command to t520 where Drkota is physically plugged in."""
     if os.uname().nodename == REMOTE_HOST:
         return
     # If plotting a local SVG file on bazina, copy it to t520:/tmp/ first
