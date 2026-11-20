@@ -70,7 +70,7 @@ def parse_kv(raw):
 
 
 def get_status_dict():
-    raw = send_telnet(["adsl show info", "wan show connection info"], wait=0.8)
+    raw = send_telnet(["adsl show info", "wan show connection info pppoe_ptm_848_0_d"], wait=0.8)
     kv = parse_kv(raw)
     status = {
         "dsl_status": kv.get("status", "Unknown"),

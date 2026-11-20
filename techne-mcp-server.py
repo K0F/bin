@@ -98,9 +98,9 @@ def get_fleet_summary():
     return {
         "fleet": "Techné Fleet Mesh",
         "nodes": {
-            "t520": {"role": "Main Workstation / Synergy KVM Server", "arch": "x86_64", "ip": "192.168.1.100"},
-            "bazina": {"role": "Compute / GPU / Drkota V-Plotter Host", "arch": "x86_64 Debian 13", "ip": "192.168.1.104"},
-            "boxC": {"role": "Headless Gateway / Web / Storage / Git / MCP", "arch": "Raspberry Pi", "ip": "192.168.1.101"}
+            "t520": {"role": "Main Workstation / Synergy KVM Server / Speech Synthesizer", "arch": "x86_64 Arch Linux", "ip": "192.168.1.105 / 10.0.0.18"},
+            "permafrost": {"role": "Compute / Radeon RX 5600 XT GPU / Drkota V-Plotter Host / TRL-LoRA", "alias": "bazina", "arch": "x86_64 Debian 13", "ip": "192.168.1.104 / 10.0.0.15"},
+            "boxC": {"role": "Headless Gateway / Web / Storage / Git / MCP", "arch": "Raspberry Pi", "ip": "192.168.1.101 / 10.0.0.14"}
         },
         "philosophy": "Zero-bloat, POSIX, real-time audio DSP, offline-first open-source engineering",
         "primary_url": "https://xn--peek-h6a.com"
@@ -252,6 +252,67 @@ def handle_tool_call(name: str, arguments: dict):
                     pass
         return {"content": [{"type": "text", "text": "Techné Doctrine: Zero-bloat, POSIX, real-time audio DSP, offline-first open-source engineering."}]}
 
+    elif name == "get_observatory_telemetry":
+        chronicle_bin = Path("/home/kof/bin/drkota-chronicle")
+        if chronicle_bin.exists():
+            try:
+                import subprocess
+                res = subprocess.run([str(chronicle_bin), "stamp", "--dry-run", "--json"], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0 and res.stdout.strip():
+                    return {"content": [{"type": "text", "text": res.stdout.strip()}]}
+            except Exception:
+                pass
+        # Fallback reading directly from /dev/shm
+        shm_grid = Path("/dev/shm/observator_status.json")
+        shm_heat = Path("/dev/shm/heat_fleet_summary.json")
+        grid_data = {}
+        heat_data = {}
+        if shm_grid.exists():
+            try:
+                grid_data = json.loads(shm_grid.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if shm_heat.exists():
+            try:
+                heat_data = json.loads(shm_heat.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        summary = {"grid": grid_data, "heat": heat_data, "source": "shm_fallback"}
+        return {"content": [{"type": "text", "text": json.dumps(summary, indent=2, ensure_ascii=False)}]}
+
+    elif name == "get_timewarp_status":
+        dh_bin = Path("/home/kof/src/timewarp-alpine/dh36")
+        dh_out = ""
+        if dh_bin.exists():
+            try:
+                import subprocess
+                res = subprocess.run([str(dh_bin), "-j"], capture_output=True, text=True, timeout=3)
+                if res.returncode == 0:
+                    dh_out = res.stdout.strip()
+            except Exception:
+                pass
+        return {"content": [{"type": "text", "text": dh_out or "dh36 not available"}]}
+
+    elif name == "drkota_chronicle":
+        action = arguments.get("action", "stamp").strip()
+        arg = arguments.get("argument", "").strip()
+        dry_run = arguments.get("dry_run", True)
+        chronicle_bin = Path("/home/kof/bin/drkota-chronicle")
+        if not chronicle_bin.exists():
+            return {"isError": True, "content": [{"type": "text", "text": "drkota-chronicle not found."}]}
+        import subprocess
+        cmd = [str(chronicle_bin), action]
+        if arg:
+            cmd.append(arg)
+        if dry_run:
+            cmd.append("--dry-run")
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            out = res.stdout.strip() or res.stderr.strip()
+            return {"content": [{"type": "text", "text": out}]}
+        except Exception as e:
+            return {"isError": True, "content": [{"type": "text", "text": f"Error running drkota-chronicle: {e}"}]}
+
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
 
@@ -360,6 +421,29 @@ def process_jsonrpc(req: dict) -> dict:
                         "name": "get_techne_doctrine",
                         "description": "Retrieves the canonical Techné core manifesto, editorial guidelines, and engineering doctrine.",
                         "inputSchema": {"type": "object", "properties": {}}
+                    },
+                    {
+                        "name": "get_observatory_telemetry",
+                        "description": "Returns live environmental telemetry: 50 Hz continental grid micro-deviations, wireless M-Bus radiator heat units (19 meters), and Prague weather.",
+                        "inputSchema": {"type": "object", "properties": {}}
+                    },
+                    {
+                        "name": "get_timewarp_status",
+                        "description": "Returns current harmonic metric decimal time (dh36, decan 0-35, azimuth 0-360) and synodic lunar cycle.",
+                        "inputSchema": {"type": "object", "properties": {}}
+                    },
+                    {
+                        "name": "drkota_chronicle",
+                        "description": "Generates or plots vector telemetry for Drkota V-plotter (stamp, strip, warp, fork). Default dry_run=true.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["stamp", "strip", "warp", "fork", "status"], "description": "Chronicle plotting action"},
+                                "argument": {"type": "string", "description": "Optional argument (rate for warp, scenario for fork)"},
+                                "dry_run": {"type": "boolean", "description": "If true, simulates without moving hardware (default: true)"}
+                            },
+                            "required": ["action"]
+                        }
                     }
                 ]
             }
@@ -662,7 +746,28 @@ a {{ color: #569cd6; }}
         pass
 
 
+def run_stdio():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+            resp = process_jsonrpc(req)
+            if resp is not None:
+                sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+        except Exception as e:
+            err = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(e)}}
+            sys.stdout.write(json.dumps(err) + "\n")
+            sys.stdout.flush()
+
+
 def main():
+    if "--stdio" in sys.argv:
+        run_stdio()
+        return
+
     server = ThreadingHTTPServer((HOST, PORT), MCPRequestHandler)
     print(f"Techné Safety MCP Server running on http://{HOST}:{PORT}")
     print(f"Public Base URL: {BASE_URL}")

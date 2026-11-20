@@ -22,7 +22,14 @@ import urllib.request
 import urllib.error
 import argparse
 
-DEFAULT_HOST = os.environ.get("QWEN_HOST", "http://10.0.0.15:8080")
+def get_default_host():
+    if "QWEN_HOST" in os.environ:
+        return os.environ["QWEN_HOST"]
+    if os.uname().nodename == "bazina":
+        return "http://127.0.0.1:8080"
+    return "http://192.168.1.104:8080"
+
+DEFAULT_HOST = get_default_host()
 ENDPOINT = f"{DEFAULT_HOST.rstrip('/')}/v1/chat/completions"
 
 
