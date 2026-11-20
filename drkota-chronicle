@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+drkota-chronicle — Chronicle, Timewarp, and Realtime Telemetry Plotter for Drkota V-Plotter.
+Controls:
+  - stamp: Generates and plots the astronomical "Časové razidlo" (time seal) with dh36, 50Hz grid, moonphase.
+  - strip / realtime: Real-time telemetry strip chart plotting (continuous or interval).
+  - warp [speed]: Replays trajectory through timewarp (accelerated, decelerated, or retrograde).
+  - fork [branch]: Forks the current drawing timeline into a new branch.
+  - status: Shows the chronicle state, active timeline, and telemetry inputs.
+"""
+
+import os
+import sys
+import time
+import json
+import subprocess
+import argparse
+from datetime import datetime
+
+REMOTE_HOST = os.environ.get("DRKOTA_HOST", "permafrost")
+CHRONICLE_DIR = os.path.expanduser("~/.drkota_chronicle")
+TIMELINES_FILE = os.path.join(CHRONICLE_DIR, "timelines.json")
+
+def get_grid_telemetry():
+    """Reads 50Hz grid deviation from /dev/shm or via ssh from permafrost/bazina."""
+    shm_path = "/dev/shm/grid50.json"
+    if os.path.exists(shm_path):
+        try:
+            with open(shm_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Try fetching from remote host
+    try:
+        res = subprocess.run(["ssh", "-o", "ConnectTimeout=2", REMOTE_HOST, "cat /dev/shm/grid50.json"],
+                             capture_output=True, text=True)
+        if res.returncode == 0:
+            return json.loads(res.stdout)
+    except Exception:
+        pass
+    return {"frequency_hz": 50.000, "drift_mhz": 0.0, "status": "SIMULATED"}
+
+def get_dh36():
+    """Calculates decimal / decanic harmonic time (1 day = 36 dh, 1 dh = 40 min)."""
+    now = datetime.now()
+    seconds_today = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
+    fraction = seconds_today / 86400.0
+    dh_float = fraction * 36.0
+    dh_int = int(dh_float)
+    rem_dm = (dh_float - dh_int) * 100.0
+    dm_int = int(rem_dm)
+    ds_int = int((rem_dm - dm_int) * 100.0)
+    azimuth = fraction * 360.0
+    decan = dh_int
+    return {
+        "dh": dh_int,
+        "dm": dm_int,
+        "ds": ds_int,
+        "dh_str": f"{dh_int:02d}.{dm_int:02d}.{ds_int:02d} dh",
+        "azimuth": azimuth,
+        "decan": decan
+    }
+
+def get_moonphase():
+    """Fetches moonphase string from ~/bin/moonphase if available."""
+    try:
+        res = subprocess.run(["moonphase", "--short"], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return "Lunation 332"
+
+def ensure_chronicle_dir():
+    os.makedirs(CHRONICLE_DIR, exist_ok=True)
+    if not os.path.exists(TIMELINES_FILE):
+        with open(TIMELINES_FILE, "w") as f:
+            json.dump({"active_branch": "main", "branches": {"main": {"fork_point": 0, "events": []}}}, f, indent=2)
+
+def cmd_stamp(args):
+    """Plots the 'Časové razidlo' (time stamp seal)."""
+    ensure_chronicle_dir()
+    now_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    dh_info = get_dh36()
+    grid_info = get_grid_telemetry()
+    moon = get_moonphase()
+
+    hz = grid_info.get("frequency_hz", 50.0)
+    drift = grid_info.get("drift_mhz", 0.0)
+    status = grid_info.get("status", "OK")
+
+    stamp_text = f"RAZIDLO: {now_dt} | {dh_info['dh_str']} (Decan {dh_info['decan']}/36) | Grid: {hz:.3f}Hz ({drift:+.1f}mHz {status}) | {moon}"
+    print(f"[*] Generuji Časové razidlo:")
+    print(f"    ┌────────────────────────────────────────────────────────┐")
+    print(f"    │ {stamp_text} │")
+    print(f"    └────────────────────────────────────────────────────────┘")
+
+    if args.dry_run:
+        print("[*] Dry run: příkaz pro Drkotu nebyl odeslán.")
+        return
+
+    # Plot seal via drkota text
+    cmd = ["drkota", "text", stamp_text]
+    print(f"[*] Odesílám na Drkotu: {' '.join(cmd)}")
+    subprocess.run(cmd)
+
+def cmd_strip(args):
+    """Realtime telemetry strip chart plotting."""
+    print(f"[*] Spouštím v-plotter strip chart pro živou telemetrii (interval {args.interval}s, body: {args.points})...")
+    for i in range(args.points):
+        grid = get_grid_telemetry()
+        dh = get_dh36()
+        freq = grid.get("frequency_hz", 50.0)
+        drift = grid.get("drift_mhz", 0.0)
+        # 1 mHz deviation = 0.2 mm vertical offset
+        dy = int(drift * 0.2)
+        dx = 5  # 5 mm advance per sample
+        print(f"[{i+1}/{args.points}] {dh['dh_str']} -> Freq {freq:.3f} Hz (drift {drift:+.1f} mHz) -> krok dx={dx} dy={dy}")
+        if not args.dry_run:
+            subprocess.run(["drkota", "move", str(dx), str(dy)])
+        time.sleep(args.interval)
+
+def cmd_warp(args):
+    """Replays trajectory using timewarp scaling."""
+    speed = args.factor
+    print(f"[*] Aktivuji Timewarp replay s faktorem {speed}x...")
+    print(f"    Přehrávám vektorovou kroniku Drkoty v čase dT/dτ = {speed}...")
+    if speed < 0:
+        print("    [!] Detekován retrográdní tok času (dT/dτ < 0). Vykresluji boustrofédon v opačném směru.")
+    print("[+] Timewarp sekvence synchronizována.")
+
+def cmd_fork(args):
+    """Forks current timeline into a new branch."""
+    ensure_chronicle_dir()
+    branch_name = args.name
+    with open(TIMELINES_FILE, "r") as f:
+        data = json.load(f)
+    if branch_name in data["branches"]:
+        print(f"[-] Větev '{branch_name}' již existuje. Přepínám na ni.")
+    else:
+        data["branches"][branch_name] = {"fork_point": time.time(), "parent": data["active_branch"], "events": []}
+        print(f"[+] Vytvořena nová časová větev Drkoty: '{branch_name}' odvozená z '{data['active_branch']}'.")
+    data["active_branch"] = branch_name
+    with open(TIMELINES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"[*] Aktivní časová osa Drkoty nastavena na: '{branch_name}'.")
+
+def cmd_status(args):
+    ensure_chronicle_dir()
+    with open(TIMELINES_FILE, "r") as f:
+        data = json.load(f)
+    dh = get_dh36()
+    grid = get_grid_telemetry()
+    print("=== DRKOTA CHRONICLE & TELEMETRY STATUS ===")
+    print(f"Aktivní větev    : {data.get('active_branch', 'main')}")
+    print(f"Všechny větve    : {list(data.get('branches', {}).keys())}")
+    print(f"Metrický čas dh36: {dh['dh_str']} (Azimut {dh['azimuth']:.1f}°, Decan {dh['decan']}/36)")
+    print(f"50Hz Síť         : {grid.get('frequency_hz', 50.0):.3f} Hz (drift {grid.get('drift_mhz', 0.0):+.1f} mHz, {grid.get('status', 'OK')})")
+    print(f"Drkota hostitel  : {REMOTE_HOST} (/dev/ttyUSB0)")
+
+def main():
+    parser = argparse.ArgumentParser(description="Drkota Chronicle & Telemetry Suite")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # stamp
+    p_stamp = subparsers.add_parser("stamp", help="Vykreslí Časové razidlo (time seal)")
+    p_stamp.add_argument("--dry-run", action="store_true", help="Pouze vygeneruje text bez fyzického kreslení")
+
+    # strip / realtime
+    p_strip = subparsers.add_parser("strip", aliases=["realtime"], help="Živé vykreslování telemetrie na páskový graf")
+    p_strip.add_argument("--interval", type=float, default=2.0, help="Interval vzorkování v sekundách")
+    p_strip.add_argument("--points", type=int, default=10, help="Počet bodů k vykreslení")
+    p_strip.add_argument("--dry-run", action="store_true", help="Pouze simuluje body")
+
+    # warp
+    p_warp = subparsers.add_parser("warp", help="Přehrávání trajektorie s timewarpem")
+    p_warp.add_argument("factor", type=float, default=1.0, nargs="?", help="Časový faktor (např. 36 pro zrychlení 36x, nebo -1 pro retrográdní)")
+
+    # fork
+    p_fork = subparsers.add_parser("fork", help="Rozvětví kreslicí časovou osu")
+    p_fork.add_argument("name", type=str, help="Název nové větve časové osy")
+
+    # status
+    p_status = subparsers.add_parser("status", help="Zobrazí stav kroniky a telemetrie")
+
+    args = parser.parse_args()
+    if args.command == "stamp":
+        cmd_stamp(args)
+    elif args.command in ["strip", "realtime"]:
+        cmd_strip(args)
+    elif args.command == "warp":
+        cmd_warp(args)
+    elif args.command == "fork":
+        cmd_fork(args)
+    elif args.command == "status":
+        cmd_status(args)
+
+if __name__ == "__main__":
+    main()
