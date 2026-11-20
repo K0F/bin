@@ -43,6 +43,7 @@ ALLOWED_ROOTS = [
     Path("/home/kof/src").resolve(),
     Path("/home/kof/.agents").resolve(),
     Path("/home/kof/.gemini").resolve(),
+    Path("/var/www/html/lagrange").resolve(),
 ]
 
 # Sensitive patterns that MUST NEVER be served
@@ -313,6 +314,48 @@ def handle_tool_call(name: str, arguments: dict):
         except Exception as e:
             return {"isError": True, "content": [{"type": "text", "text": f"Error running drkota-chronicle: {e}"}]}
 
+    elif name == "get_lagrange_data":
+        status_file = Path("/var/www/html/lagrange/drkota_clock_status.json")
+        trail_file = Path("/var/www/html/lagrange/live_trail.json")
+        include_trail = arguments.get("include_trail", False)
+
+        data = {}
+        if status_file.exists():
+            try:
+                with open(status_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                data["status_error"] = str(e)
+        elif trail_file.exists():
+            try:
+                with open(trail_file, "r", encoding="utf-8") as f:
+                    full_trail = json.load(f)
+                    data = {k: v for k, v in full_trail.items() if k != "trail"}
+            except Exception as e:
+                data["trail_error"] = str(e)
+
+        if include_trail and trail_file.exists():
+            try:
+                with open(trail_file, "r", encoding="utf-8") as f:
+                    full_trail = json.load(f)
+                    data["trail"] = full_trail.get("trail", [])
+            except Exception as e:
+                data["trail_error"] = str(e)
+
+        # Fallback to local lagrange.py if files do not exist
+        if not data:
+            lagrange_py = Path("/home/kof/src/lagrange/lagrange.py")
+            if lagrange_py.exists():
+                try:
+                    import subprocess
+                    res = subprocess.run([sys.executable, str(lagrange_py), "--json"], capture_output=True, text=True, timeout=5)
+                    if res.returncode == 0 and res.stdout.strip():
+                        return {"content": [{"type": "text", "text": res.stdout.strip()}]}
+                except Exception as e:
+                    data["exec_error"] = str(e)
+
+        return {"content": [{"type": "text", "text": json.dumps(data, indent=2, ensure_ascii=False)}]}
+
     else:
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
 
@@ -336,6 +379,20 @@ def handle_resource_read(uri: str):
                 lines = f.readlines()
                 # Return last 100 lines of journal
                 return {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": "".join(lines[-100:])}]}
+    elif uri == "techne://lagrange-status":
+        p = Path("/var/www/html/lagrange/drkota_clock_status.json")
+        if not p.exists():
+            p = Path("/var/www/html/lagrange/live_trail.json")
+        if p.exists() and is_path_safe(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return {"contents": [{"uri": uri, "mimeType": "application/json", "text": f.read()}]}
+    elif uri == "techne://lagrange-svg":
+        p = Path("/var/www/html/lagrange/lagrange.svg")
+        if not p.exists():
+            p = Path("/home/kof/src/lagrange/lagrange_constellation.svg")
+        if p.exists() and is_path_safe(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return {"contents": [{"uri": uri, "mimeType": "image/svg+xml", "text": f.read()}]}
     return {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "Resource not found."}]}
 
 
@@ -444,6 +501,16 @@ def process_jsonrpc(req: dict) -> dict:
                             },
                             "required": ["action"]
                         }
+                    },
+                    {
+                        "name": "get_lagrange_data",
+                        "description": "Returns live celestial Lagrange spirograph harmonics, multi-planetary libration coordinates (Mercury through Saturn, L2-L5), 50 Hz grid frequency deviation, weather, and Drkota plotter status.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "include_trail": {"type": "boolean", "description": "Include full recent coordinate trail points (default: false)"}
+                            }
+                        }
                     }
                 ]
             }
@@ -465,6 +532,9 @@ def process_jsonrpc(req: dict) -> dict:
                     {"uri": "techne://fleet-status", "name": "Fleet Mesh Architecture", "mimeType": "application/json"},
                     {"uri": "techne://samizdat-manifesto", "name": "Samizdat Editorial Manifesto", "mimeType": "text/markdown"},
                     {"uri": "techne://dnes-journal", "name": "Recent Daily Journal Milestones", "mimeType": "text/markdown"}
+                    {"uri": "techne://dnes-journal", "name": "Recent Daily Journal Milestones", "mimeType": "text/markdown"},
+                    {"uri": "techne://lagrange-status", "name": "Lagrange Spirograph & Celestial Harmonics", "mimeType": "application/json"},
+                    {"uri": "techne://lagrange-svg", "name": "Lagrange Constellation Vector Blueprint", "mimeType": "image/svg+xml"}
                 ]
             }
         }
@@ -635,6 +705,12 @@ a {{ color: #569cd6; }}
   <li>Strictly read-only: no file modification, no execution.</li>
   <li>Denylist active: private keys, credentials, tokens, .env, and passwords blocked.</li>
   <li>Sandbox root: <code>~/src</code>, <code>~/.agents</code>, <code>~/.gemini</code>.</li>
+<h3>Safety Boundary & Resources:</h3>
+<ul>
+  <li>Strictly read-only: no file modification, no execution.</li>
+  <li>Denylist active: private keys, credentials, tokens, .env, and passwords blocked.</li>
+  <li>Sandbox root: <code>~/src</code>, <code>~/.agents</code>, <code>~/.gemini</code>, <code>/var/www/html/lagrange</code>.</li>
+  <li><b>Resources:</b> <code>techne://doctrine</code>, <code>techne://fleet-status</code>, <code>techne://lagrange-status</code>, <code>techne://lagrange-svg</code>, <code>techne://dnes-journal</code>.</li>
 </ul>
 <p>--τέχνη & kof</p>
 </body>
