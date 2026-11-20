@@ -5,7 +5,22 @@ Works both locally on t520 (/dev/ttyUSB0) and transparently from bazina/boxC via
 """
 import sys, os, time, subprocess, argparse
 
-PORT = os.environ.get("DRKOTA_PORT", "/dev/ttyUSB0")
+def get_port():
+    env_port = os.environ.get("DRKOTA_PORT")
+    if env_port and os.path.exists(env_port):
+        return env_port
+    candidates = [
+        "/dev/drkota",
+        "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+        "/dev/ttyUSB0",
+        "/dev/ttyUSB1",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return env_port or "/dev/drkota"
+
+PORT = get_port()
 BAUD = int(os.environ.get("DRKOTA_BAUD", 115200))
 GOMOTOR_BIN = os.path.expanduser("~/src/gomotor/gomotor")
 REMOTE_HOST = os.environ.get("DRKOTA_HOST", "bazina")
