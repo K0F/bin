@@ -140,7 +140,14 @@ def cmd_plot(args):
     if not os.path.exists(GOMOTOR_BIN):
         print(f"Building {GOMOTOR_BIN}...")
         subprocess.run(["go", "build", "-o", GOMOTOR_BIN, "main.go"], cwd=os.path.expanduser("~/src/gomotor"), check=True)
-    cmd = [GOMOTOR_BIN, "--file", svg_file, "--port", PORT, "--center", "--fit"]
+    cmd = [GOMOTOR_BIN, "--file", svg_file, "--port", PORT, "--center"]
+    has_fit_or_scale = False
+    for x in (args.extra or []):
+        if "-fit" in x or "-scale" in x:
+            has_fit_or_scale = True
+            break
+    if not has_fit_or_scale:
+        cmd.append("--fit")
     if args.extra:
         cmd.extend(args.extra)
     print(f"Executing: {' '.join(cmd)}")
