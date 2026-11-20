@@ -38,7 +38,7 @@ if [ ! -d "/home/kof/src/konzdat/$ISSUE_DIR" ]; then
     ISSUE_DIR="issues/Log_26_$ISSUE"
 fi
 
-ssh t520 "cd ~/src/samizdat/$ISSUE_DIR 2>/dev/null || cd ~/src/samizdat/issues/Log_26_${ISSUE#Log_26_}; xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1; for d in ~/src/samizdat/clanky/*/; do (cd \"\$d\" && [ -f clanek.tex ] && xelatex -interaction=nonstopmode clanek.tex >/dev/null 2>&1); done"
+ssh t520 "cd ~/src/samizdat/$ISSUE_DIR 2>/dev/null || cd ~/src/samizdat/issues/Log_26_${ISSUE#Log_26_}; xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1 || true; for d in ~/src/samizdat/clanky/*/; do (cd \"\$d\" && if [ -f clanek.tex ]; then xelatex -interaction=nonstopmode clanek.tex >/dev/null 2>&1 || true; fi); done; true"
 
 rsync -az t520:~/src/samizdat/issues/ issues/
 rsync -az t520:~/src/samizdat/clanky/ clanky/
