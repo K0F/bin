@@ -760,12 +760,12 @@ def path_astrolabe_dial(cx, cy, r, azimuth_deg, lunar_pos):
 # SVG Layout Generators: Stamp ("Časové razidlo") & Strip (3-Track Seismograph)
 # ==============================================================================
 
-def generate_stamp_svg(telemetry, width_mm=165.0):
+def generate_stamp_svg(telemetry, width_mm=105.0):
     """
     Generates the authentic "Časové razidlo" (Astrolabe Vector Seal).
-    Framed rectangular seal in Golden Ratio proportions: W = 165 mm, H = W / phi ~ 102.0 mm.
-    Line height is calibrated to exactly 9.0 mm with large, legible characters.
-    Optimized for rapid, crisp plotting under 4 minutes.
+    Framed rectangular seal in Golden Ratio proportions: W = 105 mm, H = W / phi ~ 65.0 mm.
+    Line height is calibrated to exactly 5.0 mm with crisp, compact typography.
+    Optimized for solid, deep inking in the central sweet-spot of the V-plotter.
     """
     h_mm = width_mm / PHI
     paths = []
@@ -774,21 +774,21 @@ def generate_stamp_svg(telemetry, width_mm=165.0):
     paths.append(path_rect(2.0, 2.0, width_mm - 4.0, h_mm - 4.0))
 
     # 2. Astrolabe Dial (Left Side)
-    dial_cx = 35.0
+    dial_cx = 22.0
     dial_cy = h_mm / 2.0
-    dial_r = 30.0
+    dial_r = 16.5
     azimuth = telemetry["time"]["dh36"]["azimuth_deg"]
     lunar_pos = telemetry["time"]["lunar"]["position"]
     paths.extend(path_astrolabe_dial(dial_cx, dial_cy, dial_r, azimuth, lunar_pos))
 
     # Vertical divider line between dial and typography
-    div_x = 70.0
-    paths.append(path_line(div_x, 6.0, div_x, h_mm - 6.0))
+    div_x = 44.0
+    paths.append(path_line(div_x, 5.0, div_x, h_mm - 5.0))
 
-    # 3. Typography (Right Side) — Exact 9.0 mm Line Height & Large Legible Characters
-    t_x = div_x + 4.5
-    y_start = 12.0
-    pitch_y = 9.0  # Exact 9mm line height requested by user
+    # 3. Typography (Right Side) — Exact 5.0 mm Line Height
+    t_x = div_x + 4.0
+    y_start = 8.5
+    pitch_y = 5.0  # Exact 5mm line height requested by user
 
     t_data = telemetry["time"]
     g_data = telemetry["grid"]
@@ -797,15 +797,15 @@ def generate_stamp_svg(telemetry, width_mm=165.0):
     branch = telemetry.get("scenario", "CANONICAL")
 
     lines = [
-        ("OBSERVATOŘ // ČASOVÉ RAZIDLO", 2.6, 4.4),
-        (f"ČAS : {t_data['cet_str']} CET", 2.2, 3.8),
-        (f"DH36: {t_data['dh36']['str']} (DEKAN {t_data['dh36']['decan']:02d})", 2.0, 3.6),
-        (f"AZIM: {t_data['dh36']['azimuth_deg']:.1f}° {t_data['dh36']['cardinal'][:12]}", 2.0, 3.6),
-        (f"LUNA: {t_data['lunar']['lunation_number']}. LUNACE | {t_data['lunar']['illumination_pct']}%", 2.0, 3.6),
-        (f"SÍŤ : {g_data['freq_hz']:.3f} HZ (Δ {g_data['drift_mhz']:+.1f} MHZ)", 2.0, 3.6),
-        (f"OTOP: {h_data['total_units']:.0f} HCA | {h_data['total_meters']} MĚŘIDEL", 2.0, 3.6),
-        (f"METEO: {w_data['temp_c']:+.1f}°C | {w_data['pressure_hpa']:.0f} HPA", 2.0, 3.6),
-        ("--TÉCHNĒ & KOF // DRKOTA", 1.8, 3.2),
+        ("OBSERVATOŘ // ČASOVÉ RAZIDLO", 1.6, 2.7),
+        (f"ČAS : {t_data['cet_str']} CET", 1.4, 2.3),
+        (f"DH36: {t_data['dh36']['str']} (DEKAN {t_data['dh36']['decan']:02d})", 1.3, 2.2),
+        (f"AZIM: {t_data['dh36']['azimuth_deg']:.1f}° {t_data['dh36']['cardinal'][:10]}", 1.3, 2.2),
+        (f"LUNA: {t_data['lunar']['lunation_number']}. LUNACE | {t_data['lunar']['illumination_pct']}%", 1.3, 2.2),
+        (f"SÍŤ : {g_data['freq_hz']:.3f} HZ (Δ {g_data['drift_mhz']:+.1f} MHZ)", 1.3, 2.2),
+        (f"OTOP: {h_data['total_units']:.0f} HCA | {h_data['total_meters']} MĚŘIDEL", 1.3, 2.2),
+        (f"METEO: {w_data['temp_c']:+.1f}°C | {w_data['pressure_hpa']:.0f} HPA", 1.3, 2.2),
+        ("--TÉCHNĒ & KOF // DRKOTA", 1.2, 2.0),
     ]
 
     for idx, (txt, cw, ch) in enumerate(lines):
@@ -813,7 +813,7 @@ def generate_stamp_svg(telemetry, width_mm=165.0):
         paths.extend(render_text_strokes(txt, t_x, cur_y, char_w=cw, char_h=ch))
 
     # Decorative horizontal divider under title
-    paths.append(path_line(t_x, y_start + 5.5, width_mm - 7.0, y_start + 5.5))
+    paths.append(path_line(t_x, y_start + 3.8, width_mm - 5.0, y_start + 3.8))
 
     # Assemble SVG
     d_attr = " ".join(paths)
