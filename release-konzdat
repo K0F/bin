@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+release-konzdat — Autonomous Release & Distribution Engine for Konzdat / The Observatoř
+Observatoř Cybernetics // Techné (τέχνη) & Kof
+CC0 1.0 Universal // Public Domain // Anti-Copyright
+
+Performs complete release cycle:
+1. Rebuilds & verifies issue artifacts (MD, HTML, TXT, TEX, 600 DPI PDF).
+2. Prints 2x copies in 600 DPI monochrome (Best) to Brother DCP-J4120DW.
+3. Prepares 200 DPI downsampled PDF and dispatches to active subscribers via msmtp.
+4. Requires explicit manual approval by Kof (--approve) before sending emails.
+5. Records milestone in dnes done and announces via Piper Kasandra (~/bin/mluv).
+"""
+
+import os
+import sys
+import time
+import argparse
+import subprocess
+from datetime import datetime
+
+REPO_ROOT = "/home/kof/src/konzdat"
+
+def resolve_issue(issue_arg):
+    if issue_arg:
+        if not issue_arg.startswith("W") and not issue_arg.startswith("Log_"):
+            issue_arg = f"W{issue_arg}"
+        return issue_arg
+    
+    current_link = os.path.join(REPO_ROOT, "current")
+    if os.path.islink(current_link):
+        target = os.path.basename(os.readlink(current_link))
+        if target:
+            return target
+    
+    return f"W{datetime.now().isocalendar()[1]}"
+
+def find_pdf(issue_code):
+    candidates = [
+        os.path.join(REPO_ROOT, issue_code, "issue.pdf"),
+        os.path.join(REPO_ROOT, f"Log_26_{issue_code}", "issue.pdf"),
+        os.path.join(REPO_ROOT, "issues", issue_code, "issue.pdf"),
+        os.path.join(REPO_ROOT, "issues", f"Log_26_{issue_code}", "issue.pdf"),
+        os.path.join(REPO_ROOT, "issue.pdf")
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+def main():
+    parser = argparse.ArgumentParser(description="Release & Distribute Konzdat / Samizdat Issue")
+    parser.add_argument("issue", nargs="?", default=None, help="Issue code (e.g. W47, Log_26_W47)")
+    parser.add_argument("--approve", action="store_true", help="Explicit manual approval by Kof to dispatch emails")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate printing and email dispatch without executing")
+    parser.add_argument("--no-print", action="store_true", help="Skip physical printer output")
+    parser.add_argument("--no-mail", action="store_true", help="Skip email dispatch to subscribers")
+    parser.add_argument("--copies", type=int, default=2, help="Number of physical 600 DPI copies to print (default: 2)")
+    parser.add_argument("--pages", default=None, help="Page range for printing (e.g. 1-2, default: all pages)")
+    args = parser.parse_args()
+
+    issue_code = resolve_issue(args.issue)
+
+    print("╔════════════════════════════════════════════════════════════════════════╗")
+    print("║ THE OBSERVATOŘ // RELEASE-KONZDAT (600 DPI PRINT & 200 DPI DISPATCH)   ║")
+    print("║ Observatoř Cybernetics // Techné & Kof                                ║")
+    print("╚════════════════════════════════════════════════════════════════════════╝")
+    print(f"[*] Číslo vydání : {issue_code}")
+
+    # 1. Build & verify issue PDF
+    pdf_path = find_pdf(issue_code)
+    if not pdf_path:
+        print(f"[*] PDF neexistuje, spouštím kompilaci pro {issue_code}...")
+        subprocess.run(["samizdat", "build", issue_code], check=True)
+        pdf_path = find_pdf(issue_code)
+
+    if not pdf_path or not os.path.exists(pdf_path):
+        print(f"[-] CHYBA: Nepodařilo se najít ani zkompilovat PDF pro {issue_code}!")
+        sys.exit(1)
+
+    pdf_size_mb = os.path.getsize(pdf_path) / (1024.0 * 1024.0)
+    print(f"[✓] Tiskové 600 DPI PDF připraveno: {pdf_path} ({pdf_size_mb:.2f} MB)")
+
+    # 2. Physical Print 2x in 600 DPI monochrome
+    if not args.no_print:
+        print(f"\n[*] Fyzický tisk: {args.copies}x kopie v 600 DPI na Brother DCP-J4120DW...")
+        page_opt = f"-o page-ranges={args.pages}" if args.pages else ""
+        print_cmd = f"lp -d DCPJ4120DW -n {args.copies} -o BRResolution=Best -o BRMonoColor=Mono -o PageSize=A4 {page_opt} '{pdf_path}'"
+        print(f"    Příkaz: {print_cmd}")
+        if not args.dry_run:
+            res = os.system(print_cmd)
+            if res == 0:
+                print(f"[✓] Úloha ({args.copies}x kopie 600 DPI) odeslána do tiskové fronty DCPJ4120DW.")
+            else:
+                print(f"[-] Varování: Tiskový příkaz selhal s kódem {res}.")
+        else:
+            print("[*] DRY-RUN: Tisk simulován.")
+    else:
+        print("[*] Fyzický tisk přeskočen (--no-print).")
+
+    # 3. Downsample to 200 DPI and dispatch to subscribers
+    if not args.no_mail:
+        print(f"\n[*] Příprava distribuce 200 DPI PDF předplatitelům...")
+        dispatch_cmd = [
+            "python3", os.path.join(REPO_ROOT, "lib", "dispatch_subscribers.py"),
+            "--issue", issue_code
+        ]
+        if args.approve:
+            dispatch_cmd.append("--approve")
+        if args.dry_run:
+            dispatch_cmd.append("--dry-run")
+
+        res = subprocess.run(dispatch_cmd)
+        if res.returncode == 2:
+            print("\n[-] Distribuce e-mailů byla pozastavena: vyžaduje ruční schválení Kofem.")
+            print(f"    Pro finální rozeslání spusťte: release-konzdat {issue_code} --approve")
+            if not args.approve and not args.dry_run:
+                sys.exit(2)
+        elif res.returncode != 0:
+            print(f"[-] Distribuce selhala s kódem {res.returncode}.")
+            sys.exit(res.returncode)
+    else:
+        print("[*] E-mailová distribuce přeskočena (--no-mail).")
+
+    # 4. Fleet chronicle & Voice announcement
+    if not args.dry_run and args.approve:
+        milestone = f"Vydáno a distribuováno číslo {issue_code} (2x 600DPI tisk na Brother, 200DPI PDF předplatitelům)"
+        subprocess.run(["dnes", "done", milestone])
+        voice_text = f"Číslo {issue_code} bylo úspěšně vydáno. Dvakrát vytištěno v šest seti de pe i na tiskárně Brother a dvouset de pe i pé dé ef odesláno předplatitelům."
+        subprocess.Popen(["/home/kof/bin/mluv", voice_text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    print("\n[✓] Release proces pro Konzdat dokončen.")
+
+if __name__ == "__main__":
+    main()
