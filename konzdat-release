@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# konzdat-release — Kompletní autonomní release pipeline Konzdatu
+set -euo pipefail
+
+ISSUE="${1:-W$(date +%V)}"
+NODE=$(hostname -s)
+
+if [ "$NODE" != "boxC" ]; then
+    echo "[*] Uzel $NODE: Přesměrovávám konzdat-release na boxC..."
+    exec ssh -t boxC "~/bin/konzdat-release '$ISSUE'"
+fi
+
+echo "=========================================================="
+echo "  THE OBSERVATOŘ // KONZDAT RELEASE PIPELINE ($ISSUE)"
+echo "=========================================================="
+
+# 1. Pre-flight sync
+echo "[1/6] Pre-flight sync flotily..."
+if [ -x "$HOME/bin/sync-fleet" ]; then
+    "$HOME/bin/sync-fleet"
+fi
+
+# 2. Generování článků a broadsheetu
+echo "[2/6] Generování článků a broadsheetu pro $ISSUE..."
+cd /home/kof/src/konzdat
+python3 lib/build_articles_18_to_21.py
+python3 lib/rebuild_all_clanky.py
+python3 lib/rebuild_issue_fast.py "$ISSUE"
+
+# 3. XeLaTeX kompilace na t520
+echo "[3/6] Přenos zdrojů a kompilace 600 DPI XeLaTeX PDF na t520..."
+rsync -az --exclude '*.pdf' issues/ t520:~/src/samizdat/issues/
+rsync -az --exclude '*.pdf' clanky/ t520:~/src/samizdat/clanky/
+
+# Resolve issue directory name on t520
+ISSUE_DIR="issues/$ISSUE"
+if [ ! -d "/home/kof/src/konzdat/$ISSUE_DIR" ]; then
+    ISSUE_DIR="issues/Log_26_$ISSUE"
+fi
+
+ssh t520 "cd ~/src/samizdat/$ISSUE_DIR 2>/dev/null || cd ~/src/samizdat/issues/Log_26_${ISSUE#Log_26_}; xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1; for d in ~/src/samizdat/clanky/*/; do (cd \"\$d\" && [ -f clanek.tex ] && xelatex -interaction=nonstopmode clanek.tex >/dev/null 2>&1); done"
+
+rsync -az t520:~/src/samizdat/issues/ issues/
+rsync -az t520:~/src/samizdat/clanky/ clanky/
+
+# 4. Sync na živý web
+echo "[4/6] Publikace na živý web (/var/www/html/konzdat/)..."
+rsync -az issues/ /var/www/html/konzdat/
+rsync -az clanky/ /var/www/html/konzdat/clanky/
+if [ -f "$ISSUE_DIR/index.html" ]; then
+    cp -a "$ISSUE_DIR/index.html" /var/www/html/konzdat/index.html
+fi
+
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://xn--peek-h6a.com/konzdat/ || echo "ERR")
+echo "  [+] HTTP Status: $HTTP_CODE (https://pešek.com/konzdat/)"
+
+# 5. Git commit & push
+echo "[5/6] Git commit a synchronizace repozitáře..."
+git add -A
+if ! git diff-index --quiet HEAD --; then
+    git commit -m "release($ISSUE): publikace cisla do webrootu a tiskovych PDF"
+    git push origin main
+fi
+ssh t520 "git -C ~/src/samizdat reset --hard origin/main"
+
+# 6. Kronika a hlasové hlášení
+echo "[6/6] Zápis do kroniky a hlasové hlášení..."
+dnes done "Konzdat release: Číslo $ISSUE úspěšně publikováno na webu a přeloženo do 600 DPI PDF" || true
+now "Konzdat: Release $ISSUE dokoncen" || true
+if [ -x "$HOME/bin/mluv" ]; then
+    "$HOME/bin/mluv" "Číslo $ISSUE bylo úspěšně publikováno a je připraveno k prohlížení i tisku." || true
+fi
+
+echo "=========================================================="
+echo "[✓] Vydání $ISSUE je kompletní: https://pešek.com/konzdat/"
+echo "=========================================================="
