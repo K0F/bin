@@ -764,29 +764,14 @@ def generate_stamp_svg(telemetry, width_mm=165.0):
     """
     Generates the authentic "Časové razidlo" (Astrolabe Vector Seal).
     Framed rectangular seal in Golden Ratio proportions: W = 165 mm, H = W / phi ~ 102.0 mm.
-    Line height is calibrated to exactly 9.0 mm with large, legible characters (char_h = 5.2 mm).
+    Line height is calibrated to exactly 9.0 mm with large, legible characters.
+    Optimized for rapid, crisp plotting under 4 minutes.
     """
     h_mm = width_mm / PHI
     paths = []
 
-    # 1. Outer & Inner Borders (Golden Ratio phi)
-    paths.append(path_rect(1.2, 1.2, width_mm - 2.4, h_mm - 2.4))
-    paths.append(path_rect(3.5, 3.5, width_mm - 7.0, h_mm - 7.0))
-
-    # Corner filigree brackets
-    c_len = 6.0
-    # Top-Left
-    paths.append(path_line(5.5, 5.5, 5.5 + c_len, 5.5))
-    paths.append(path_line(5.5, 5.5, 5.5, 5.5 + c_len))
-    # Top-Right
-    paths.append(path_line(width_mm - 5.5, 5.5, width_mm - 5.5 - c_len, 5.5))
-    paths.append(path_line(width_mm - 5.5, 5.5, width_mm - 5.5, 5.5 + c_len))
-    # Bottom-Left
-    paths.append(path_line(5.5, h_mm - 5.5, 5.5 + c_len, h_mm - 5.5))
-    paths.append(path_line(5.5, h_mm - 5.5, 5.5, h_mm - 5.5 - c_len))
-    # Bottom-Right
-    paths.append(path_line(width_mm - 5.5, h_mm - 5.5, width_mm - 5.5 - c_len, h_mm - 5.5))
-    paths.append(path_line(width_mm - 5.5, h_mm - 5.5, width_mm - 5.5, h_mm - 5.5 - c_len))
+    # 1. Clean Outer Border (Single framed perimeter)
+    paths.append(path_rect(2.0, 2.0, width_mm - 4.0, h_mm - 4.0))
 
     # 2. Astrolabe Dial (Left Side)
     dial_cx = 35.0
@@ -799,7 +784,6 @@ def generate_stamp_svg(telemetry, width_mm=165.0):
     # Vertical divider line between dial and typography
     div_x = 70.0
     paths.append(path_line(div_x, 6.0, div_x, h_mm - 6.0))
-    paths.append(path_line(div_x + 1.0, 8.0, div_x + 1.0, h_mm - 8.0))
 
     # 3. Typography (Right Side) — Exact 9.0 mm Line Height & Large Legible Characters
     t_x = div_x + 4.5
