@@ -1,200 +1,1170 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-drkota-chronicle — Chronicle, Timewarp, and Realtime Telemetry Plotter for Drkota V-Plotter.
-Controls:
-  - stamp: Generates and plots the astronomical "Časové razidlo" (time seal) with dh36, 50Hz grid, moonphase.
-  - strip / realtime: Real-time telemetry strip chart plotting (continuous or interval).
-  - warp [speed]: Replays trajectory through timewarp (accelerated, decelerated, or retrograde).
-  - fork [branch]: Forks the current drawing timeline into a new branch.
-  - status: Shows the chronicle state, active timeline, and telemetry inputs.
+drkota-chronicle — Unified Timewarp + Grid + Weather + Heat + Časové Razidlo Engine for Drkota V-Plotter
+Observatoř Cybernetics // Kryštof Pešek (Kof) & Techné (τέχνη)
+
+Unites:
+  1. Grid 50Hz continental European telemetry (/dev/shm/observator_status.json & grid50.json)
+  2. Live weather monitoring (Open-Meteo Praha with offline cache fallback)
+  3. Wireless M-Bus radiator heat telemetry (/dev/shm/heat_fleet_summary.json & heat_meters.db)
+  4. Decanic metric chronometry (dh36, decan, azimuth) & Meeus synodic lunation
+  5. Timewarp replay / retrograde time scaling (timewarp-alpine / libtimewarp.so)
+  6. "Časové razidlo" (Astrolabe Vector Seal with Golden Ratio phi)
+  7. 3-Track Seismograph Strip chronogram (Grid 50Hz + Weather + Heat pulses)
+  8. Counterfactual timeline scenarios (fork blackout, heatwave, solar_flare, deep_winter, borges)
+  9. Drkota V-plotter control (~/bin/drkota plot, --dry-run, --svg-only)
+
+Zero external pip dependencies: standard Python 3 + urllib + json + math + sqlite3.
 """
 
 import os
 import sys
 import time
 import json
-import subprocess
+import math
+import sqlite3
 import argparse
-from datetime import datetime
+import subprocess
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone, timedelta
 
-REMOTE_HOST = os.environ.get("DRKOTA_HOST", "permafrost")
-CHRONICLE_DIR = os.path.expanduser("~/.drkota_chronicle")
-TIMELINES_FILE = os.path.join(CHRONICLE_DIR, "timelines.json")
+# ==============================================================================
+# Configuration & Constants
+# ==============================================================================
 
-def get_grid_telemetry():
-    """Reads 50Hz grid deviation from /dev/shm or via ssh from permafrost/bazina."""
-    shm_path = "/dev/shm/grid50.json"
-    if os.path.exists(shm_path):
+PHI = (1.0 + math.sqrt(5.0)) / 2.0  # 1.6180339887... Golden Ratio
+
+GRID_SHM_STATUS = "/dev/shm/observator_status.json"
+GRID_SHM_LOCAL = "/dev/shm/grid50.json"
+GRID_NETZFREQUENZ_URL = "https://www.netzfrequenz.info/json/act.json"
+
+HEAT_SHM_SUMMARY = "/dev/shm/heat_fleet_summary.json"
+HEAT_DB_PATH = os.path.expanduser("~/src/observator/data/heat_meters.db")
+
+WEATHER_CACHE_PATH = "/dev/shm/drkota_weather_cache.json"
+WEATHER_CACHE_BACKUP = "/tmp/drkota_weather_cache.json"
+OPEN_METEO_URL = (
+    "https://api.open-meteo.com/v1/forecast?"
+    "latitude=50.0875&longitude=14.4214&current=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m"
+)
+
+DH36_BIN = os.path.expanduser("~/src/timewarp-alpine/dh36")
+MOONPHASE_BIN = os.path.expanduser("~/bin/moonphase")
+DRKOTA_BIN = os.path.expanduser("~/bin/drkota")
+
+DEFAULT_DRKOTA_SCALE = 1.0
+
+# ==============================================================================
+# Vector Stroke Alphabet (Normalized 0..40 x 0..50)
+# Supports ASCII uppercase, Czech accents, digits, and mathematical/astronomy symbols.
+# ==============================================================================
+
+ALPHABET = {
+    'A': [[(0, 50), (20, 0), (40, 50)], [(10, 25), (30, 25)]],
+    'B': [[(0, 50), (0, 0), (30, 0), (40, 12), (30, 25), (0, 25)], [(30, 25), (40, 37), (30, 50), (0, 50)]],
+    'C': [[(40, 0), (0, 0), (0, 50), (40, 50)]],
+    'D': [[(0, 50), (0, 0), (30, 0), (40, 25), (30, 50), (0, 50)]],
+    'E': [[(40, 0), (0, 0), (0, 50), (40, 50)], [(0, 25), (30, 25)]],
+    'F': [[(0, 50), (0, 0), (40, 0)], [(0, 25), (30, 25)]],
+    'G': [[(40, 0), (0, 0), (0, 50), (40, 50), (40, 25), (20, 25)]],
+    'H': [[(0, 0), (0, 50)], [(40, 0), (40, 50)], [(0, 25), (40, 25)]],
+    'I': [[(20, 0), (20, 50)], [(8, 0), (32, 0)], [(8, 50), (32, 50)]],
+    'J': [[(40, 0), (40, 50), (0, 50), (0, 25)]],
+    'K': [[(0, 0), (0, 50)], [(40, 0), (0, 25), (40, 50)]],
+    'L': [[(0, 0), (0, 50), (40, 50)]],
+    'M': [[(0, 50), (0, 0), (20, 25), (40, 0), (40, 50)]],
+    'N': [[(0, 50), (0, 0), (40, 50), (40, 0)]],
+    'O': [[(0, 0), (40, 0), (40, 50), (0, 50), (0, 0)]],
+    'P': [[(0, 50), (0, 0), (40, 0), (40, 25), (0, 25)]],
+    'Q': [[(0, 0), (40, 0), (40, 50), (0, 50), (0, 0)], [(20, 30), (40, 50)]],
+    'R': [[(0, 50), (0, 0), (40, 0), (40, 25), (0, 25)], [(20, 25), (40, 50)]],
+    'S': [[(40, 0), (0, 0), (0, 25), (40, 25), (40, 50), (0, 50)]],
+    'T': [[(0, 0), (40, 0)], [(20, 0), (20, 50)]],
+    'U': [[(0, 0), (0, 50), (40, 50), (40, 0)]],
+    'V': [[(0, 0), (20, 50), (40, 0)]],
+    'W': [[(0, 0), (10, 50), (20, 25), (30, 50), (40, 0)]],
+    'X': [[(0, 0), (40, 50)], [(40, 0), (0, 50)]],
+    'Y': [[(0, 0), (20, 25), (40, 0)], [(20, 25), (20, 50)]],
+    'Z': [[(0, 0), (40, 0), (0, 50), (40, 50)]],
+    # Czech Accents
+    'Á': [[(0, 50), (20, 0), (40, 50)], [(10, 25), (30, 25)], [(15, -14), (28, -4)]],
+    'Č': [[(40, 0), (0, 0), (0, 50), (40, 50)], [(10, -14), (20, -4), (30, -14)]],
+    'Ď': [[(0, 50), (0, 0), (30, 0), (40, 25), (30, 50), (0, 50)], [(10, -14), (20, -4), (30, -14)]],
+    'É': [[(40, 0), (0, 0), (0, 50), (40, 50)], [(0, 25), (30, 25)], [(15, -14), (28, -4)]],
+    'Ě': [[(40, 0), (0, 0), (0, 50), (40, 50)], [(0, 25), (30, 25)], [(10, -14), (20, -4), (30, -14)]],
+    'Í': [[(20, 0), (20, 50)], [(15, -14), (28, -4)]],
+    'Ň': [[(0, 50), (0, 0), (40, 50), (40, 0)], [(10, -14), (20, -4), (30, -14)]],
+    'Ó': [[(0, 0), (40, 0), (40, 50), (0, 50), (0, 0)], [(15, -14), (28, -4)]],
+    'Ř': [[(0, 50), (0, 0), (40, 0), (40, 25), (0, 25)], [(20, 25), (40, 50)], [(10, -14), (20, -4), (30, -14)]],
+    'Š': [[(40, 0), (0, 0), (0, 25), (40, 25), (40, 50), (0, 50)], [(10, -14), (20, -4), (30, -14)]],
+    'Ť': [[(0, 0), (40, 0)], [(20, 0), (20, 50)], [(10, -14), (20, -4), (30, -14)]],
+    'Ú': [[(0, 0), (0, 50), (40, 50), (40, 0)], [(15, -14), (28, -4)]],
+    'Ů': [[(0, 0), (0, 50), (40, 50), (40, 0)], [(14, -8), (26, -8), (26, -18), (14, -18), (14, -8)]],
+    'Ý': [[(0, 0), (20, 25), (40, 0)], [(20, 25), (20, 50)], [(15, -14), (28, -4)]],
+    'Ž': [[(0, 0), (40, 0), (0, 50), (40, 50)], [(10, -14), (20, -4), (30, -14)]],
+    # Greek / Latin Macron Extensions for Techné
+    'Ē': [[(40, 0), (0, 0), (0, 50), (40, 50)], [(0, 25), (30, 25)], [(10, -10), (30, -10)]],
+    # Numbers
+    '0': [[(0, 0), (40, 0), (40, 50), (0, 50), (0, 0)]],
+    '1': [[(10, 15), (20, 0), (20, 50)], [(5, 50), (35, 50)]],
+    '2': [[(0, 0), (40, 0), (40, 25), (0, 25), (0, 50), (40, 50)]],
+    '3': [[(0, 0), (40, 0), (40, 25), (0, 25)], [(40, 25), (40, 50), (0, 50)]],
+    '4': [[(0, 0), (0, 25), (40, 25)], [(30, 0), (30, 50)]],
+    '5': [[(40, 0), (0, 0), (0, 25), (40, 25), (40, 50), (0, 50)]],
+    '6': [[(40, 0), (0, 0), (0, 50), (40, 50), (40, 25), (0, 25)]],
+    '7': [[(0, 0), (40, 0), (20, 50)]],
+    '8': [[(0, 0), (40, 0), (40, 50), (0, 50), (0, 0)], [(0, 25), (40, 25)]],
+    '9': [[(40, 25), (0, 25), (0, 0), (40, 0), (40, 50), (0, 50)]],
+    # Punctuation & Symbols
+    '-': [[(5, 25), (35, 25)]],
+    '+': [[(20, 10), (20, 40)], [(5, 25), (35, 25)]],
+    '=': [[(5, 18), (35, 18)], [(5, 32), (35, 32)]],
+    '.': [[(18, 45), (22, 45), (22, 50), (18, 50), (18, 45)]],
+    ',': [[(22, 44), (16, 56)]],
+    ':': [[(18, 15), (22, 15)], [(18, 45), (22, 45)]],
+    ';': [[(18, 15), (22, 15)], [(22, 44), (16, 56)]],
+    '/': [[(35, 0), (5, 50)]],
+    '\\': [[(5, 0), (35, 50)]],
+    '(': [[(28, 0), (12, 25), (28, 50)]],
+    ')': [[(12, 0), (28, 25), (12, 50)]],
+    '[': [[(28, 0), (12, 0), (12, 50), (28, 50)]],
+    ']': [[(12, 0), (28, 0), (28, 50), (12, 50)]],
+    '?': [[(0, 12), (0, 0), (40, 0), (40, 22), (20, 32), (20, 38)], [(18, 46), (22, 46)]],
+    '!': [[(20, 0), (20, 35)], [(18, 46), (22, 46)]],
+    '|': [[(20, 0), (20, 50)]],
+    '_': [[(0, 50), (40, 50)]],
+    '~': [[(5, 25), (15, 18), (25, 32), (35, 25)]],
+    '*': [[(10, 15), (30, 35)], [(30, 15), (10, 35)], [(20, 10), (20, 40)]],
+    '#': [[(14, 5), (14, 45)], [(26, 5), (26, 45)], [(5, 18), (35, 18)], [(5, 32), (32, 32)]],
+    '&': [[(35, 50), (10, 25), (25, 0), (10, 0), (0, 25), (25, 50), (35, 35)]],
+    '\'': [[(20, 0), (20, 15)]],
+    '"': [[(15, 0), (15, 15)], [(25, 0), (25, 15)]],
+    '°': [[(26, 2), (36, 2), (36, 14), (26, 14), (26, 2)]],
+    '%': [[(35, 5), (5, 45)], [(10, 8), (18, 8), (18, 16), (10, 16), (10, 8)], [(22, 34), (30, 34), (30, 42), (22, 42), (22, 34)]],
+    'Δ': [[(20, 0), (40, 50), (0, 50), (20, 0)]],
+    '>': [[(10, 10), (30, 25), (10, 40)]],
+    '<': [[(30, 10), (10, 25), (30, 40)]],
+}
+
+def render_text_strokes(text, x, y, char_w=1.6, char_h=2.5, char_gap=0.45, align='left'):
+    """
+    Renders string into a list of SVG path segments (M/L) in millimeter coordinates.
+    Handles Czech accents, symbols, and case-insensitivity without KeyErrors.
+    """
+    sx = char_w / 40.0
+    sy = char_h / 50.0
+    step_x = char_w + char_gap
+    total_w = len(text) * step_x
+
+    start_x = x
+    if align == 'center':
+        start_x = x - total_w / 2.0
+    elif align == 'right':
+        start_x = x - total_w
+
+    paths = []
+    cursor_x = start_x
+
+    for ch in text:
+        if ch == ' ':
+            cursor_x += step_x * 0.85
+            continue
+
+        lookup_ch = ch.upper()
+        # Fallback mappings
+        if lookup_ch not in ALPHABET:
+            # Try unaccented or simplified
+            mapping = {'é': 'E', 'è': 'E', 'ë': 'E', 'ä': 'A', 'ö': 'O', 'ü': 'U', 'č': 'Č', 'š': 'Š', 'ž': 'Ž'}
+            lookup_ch = mapping.get(ch, lookup_ch)
+            if lookup_ch not in ALPHABET:
+                lookup_ch = '?'
+
+        strokes = ALPHABET.get(lookup_ch, [])
+        for st in strokes:
+            pts = [(cursor_x + px * sx, y + py * sy) for (px, py) in st]
+            if pts:
+                d = f"M {pts[0][0]:.2f},{pts[0][1]:.2f} " + " ".join(
+                    f"L {p[0]:.2f},{p[1]:.2f}" for p in pts[1:]
+                )
+                paths.append(d)
+
+        cursor_x += step_x
+
+    return paths
+
+# ==============================================================================
+# Telemetry Harvesters
+# ==============================================================================
+
+def harvest_grid():
+    """
+    Harvests 50Hz continental European grid telemetry.
+    1. /dev/shm/observator_status.json
+    2. /dev/shm/grid50.json
+    3. Live netzfrequenz.info API
+    4. Nominal fallback
+    """
+    # 1. Observator status
+    if os.path.exists(GRID_SHM_STATUS):
         try:
-            with open(shm_path, "r") as f:
-                return json.load(f)
+            with open(GRID_SHM_STATUS, "r") as f:
+                d = json.load(f)
+                hz = float(d.get("grid_freq", 50.0))
+                drift = float(d.get("grid_drift_mhz", (hz - 50.0) * 1000.0))
+                source = d.get("grid_source", "observator_shm")
+                updated = d.get("grid_updated", datetime.now().strftime("%H:%M:%S"))
+                return {
+                    "freq_hz": round(hz, 3),
+                    "drift_mhz": round(drift, 1),
+                    "status": "LOCKED" if abs(drift) < 50.0 else "UNSTABLE",
+                    "source": source,
+                    "updated": updated
+                }
         except Exception:
             pass
-    # Try fetching from remote host
+
+    # 2. Local grid50
+    if os.path.exists(GRID_SHM_LOCAL):
+        try:
+            with open(GRID_SHM_LOCAL, "r") as f:
+                d = json.load(f)
+                hz = float(d.get("frequency_hz", 50.0))
+                drift = float(d.get("drift_mhz", (hz - 50.0) * 1000.0))
+                status = d.get("status", "LOCKED")
+                return {
+                    "freq_hz": round(hz, 3),
+                    "drift_mhz": round(drift, 1),
+                    "status": status,
+                    "source": "grid50_local",
+                    "updated": datetime.now().strftime("%H:%M:%S")
+                }
+        except Exception:
+            pass
+
+    # 3. Live netzfrequenz
     try:
-        res = subprocess.run(["ssh", "-o", "ConnectTimeout=2", REMOTE_HOST, "cat /dev/shm/grid50.json"],
-                             capture_output=True, text=True)
-        if res.returncode == 0:
-            return json.loads(res.stdout)
+        req = urllib.request.Request(GRID_NETZFREQUENZ_URL, headers={"User-Agent": "DrkotaChronicle/1.0"})
+        with urllib.request.urlopen(req, timeout=1.8) as resp:
+            val_str = resp.read().decode("utf-8").strip()
+            hz = float(val_str)
+            drift = (hz - 50.0) * 1000.0
+            return {
+                "freq_hz": round(hz, 3),
+                "drift_mhz": round(drift, 1),
+                "status": "LOCKED",
+                "source": "netzfrequenz.info (live)",
+                "updated": datetime.now().strftime("%H:%M:%S")
+            }
     except Exception:
         pass
-    return {"frequency_hz": 50.000, "drift_mhz": 0.0, "status": "SIMULATED"}
 
-def get_dh36():
-    """Calculates decimal / decanic harmonic time (1 day = 36 dh, 1 dh = 40 min)."""
-    now = datetime.now()
-    seconds_today = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
-    fraction = seconds_today / 86400.0
-    dh_float = fraction * 36.0
-    dh_int = int(dh_float)
-    rem_dm = (dh_float - dh_int) * 100.0
-    dm_int = int(rem_dm)
-    ds_int = int((rem_dm - dm_int) * 100.0)
-    azimuth = fraction * 360.0
-    decan = dh_int
+    # 4. Fallback
     return {
-        "dh": dh_int,
-        "dm": dm_int,
-        "ds": ds_int,
-        "dh_str": f"{dh_int:02d}.{dm_int:02d}.{ds_int:02d} dh",
-        "azimuth": azimuth,
-        "decan": decan
+        "freq_hz": 50.000,
+        "drift_mhz": 0.0,
+        "status": "NOMINAL",
+        "source": "nominal_fallback",
+        "updated": datetime.now().strftime("%H:%M:%S")
     }
 
-def get_moonphase():
-    """Fetches moonphase string from ~/bin/moonphase if available."""
+def harvest_heat():
+    """
+    Harvests Wireless M-Bus radiator heat telemetry.
+    1. /dev/shm/heat_fleet_summary.json
+    2. SQLite ~/src/observator/data/heat_meters.db
+    3. Nominal fallback
+    """
+    # 1. SHM Summary
+    if os.path.exists(HEAT_SHM_SUMMARY):
+        try:
+            with open(HEAT_SHM_SUMMARY, "r") as f:
+                d = json.load(f)
+                total_units = float(d.get("total_units", 3093.0))
+                total_meters = int(d.get("total_meters", 19))
+                meters = d.get("meters", [])
+                return {
+                    "total_units": total_units,
+                    "total_meters": total_meters,
+                    "meters": meters,
+                    "source": "shm_fleet_summary"
+                }
+        except Exception:
+            pass
+
+    # 2. SQLite Database
+    if os.path.exists(HEAT_DB_PATH):
+        try:
+            conn = sqlite3.connect(HEAT_DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT count(*), sum(last_hca) FROM meters;")
+            row = c.fetchone()
+            total_meters = row[0] or 19
+            total_units = row[1] or 3093.0
+            c.execute("SELECT id, room_label, last_hca FROM meters ORDER BY id;")
+            meters_data = []
+            for r in c.fetchall():
+                meters_data.append({"id": r[0], "room_label": r[1] or f"Meter #{r[0]}", "last_hca": r[2] or 0.0})
+            conn.close()
+            return {
+                "total_units": float(total_units),
+                "total_meters": int(total_meters),
+                "meters": meters_data,
+                "source": "sqlite_db"
+            }
+        except Exception:
+            pass
+
+    # 3. Fallback
+    dummy_meters = [{"id": 18466400 + i, "room_label": f"M{i+1}", "last_hca": 100.0 + (i * 27.5) % 220} for i in range(19)]
+    return {
+        "total_units": 3093.0,
+        "total_meters": 19,
+        "meters": dummy_meters,
+        "source": "nominal_fallback"
+    }
+
+def harvest_weather():
+    """
+    Harvests Prague weather telemetry from Open-Meteo with local shm cache fallback.
+    """
+    cached = None
+    cache_file = WEATHER_CACHE_PATH if os.path.exists(os.path.dirname(WEATHER_CACHE_PATH)) else WEATHER_CACHE_BACKUP
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r") as f:
+                cached = json.load(f)
+        except Exception:
+            cached = None
+
+    # Query Open-Meteo
     try:
-        res = subprocess.run(["moonphase", "--short"], capture_output=True, text=True)
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
+        req = urllib.request.Request(OPEN_METEO_URL, headers={"User-Agent": "DrkotaChronicle/1.0"})
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            cur = data.get("current", {})
+            temp = float(cur.get("temperature_2m", 9.5))
+            rh = float(cur.get("relative_humidity_2m", 75))
+            press = float(cur.get("surface_pressure", 975.0))
+            wind = float(cur.get("wind_speed_10m", 15.0))
+
+            res = {
+                "temp_c": round(temp, 1),
+                "rh_pct": int(rh),
+                "pressure_hpa": round(press, 1),
+                "wind_kmh": round(wind, 1),
+                "source": "Open-Meteo Prague (live)",
+                "timestamp": cur.get("time", datetime.now().isoformat())
+            }
+            try:
+                with open(cache_file, "w") as f:
+                    json.dump(res, f, indent=2)
+            except Exception:
+                pass
+            return res
     except Exception:
         pass
-    return "Lunation 332"
 
-def ensure_chronicle_dir():
-    os.makedirs(CHRONICLE_DIR, exist_ok=True)
-    if not os.path.exists(TIMELINES_FILE):
-        with open(TIMELINES_FILE, "w") as f:
-            json.dump({"active_branch": "main", "branches": {"main": {"fork_point": 0, "events": []}}}, f, indent=2)
+    # Use cache if live query failed
+    if cached and "temp_c" in cached:
+        cached["source"] = "Open-Meteo (cached fallback)"
+        return cached
 
-def cmd_stamp(args):
-    """Plots the 'Časové razidlo' (time stamp seal)."""
-    ensure_chronicle_dir()
-    now_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    dh_info = get_dh36()
-    grid_info = get_grid_telemetry()
-    moon = get_moonphase()
+    # Fallback
+    return {
+        "temp_c": 9.7,
+        "rh_pct": 71,
+        "pressure_hpa": 974.3,
+        "wind_kmh": 17.6,
+        "source": "nominal_fallback",
+        "timestamp": datetime.now().isoformat()
+    }
 
-    hz = grid_info.get("frequency_hz", 50.0)
-    drift = grid_info.get("drift_mhz", 0.0)
-    status = grid_info.get("status", "OK")
+def harvest_time(target_ts=None):
+    """
+    Harvests decanic metric chronometry (dh36, decan, azimuth) and Meeus lunar phase.
+    """
+    if target_ts is None:
+        now_dt = datetime.now()
+        unix_ts = now_dt.timestamp()
+    else:
+        unix_ts = float(target_ts)
+        now_dt = datetime.fromtimestamp(unix_ts)
 
-    stamp_text = f"RAZIDLO: {now_dt} | {dh_info['dh_str']} (Decan {dh_info['decan']}/36) | Grid: {hz:.3f}Hz ({drift:+.1f}mHz {status}) | {moon}"
-    print(f"[*] Generuji Časové razidlo:")
-    print(f"    ┌────────────────────────────────────────────────────────┐")
-    print(f"    │ {stamp_text} │")
-    print(f"    └────────────────────────────────────────────────────────┘")
+    # 1. Decanic Harmonic Time (dh36)
+    # Check binary first
+    dh_info = None
+    if os.path.exists(DH36_BIN) and os.access(DH36_BIN, os.X_OK):
+        try:
+            res = subprocess.run([DH36_BIN, "-j", str(unix_ts)], capture_output=True, text=True, timeout=1.5)
+            if res.returncode == 0:
+                d = json.loads(res.stdout)
+                dh36 = d.get("dh36", {})
+                dh_info = {
+                    "str": dh36.get("str", "00.00.00"),
+                    "float": dh36.get("float", 0.0),
+                    "azimuth_deg": dh36.get("azimuth_deg", 0.0),
+                    "cardinal": dh36.get("cardinal", "N"),
+                    "decan": dh36.get("decan", 0),
+                    "standard": d.get("standard", now_dt.strftime("%H:%M:%S"))
+                }
+        except Exception:
+            pass
 
+    if dh_info is None:
+        # Exact Python decanic calculation
+        secs = now_dt.hour * 3600.0 + now_dt.minute * 60.0 + now_dt.second + now_dt.microsecond / 1e6
+        frac = secs / 86400.0
+        val = frac * 36.0
+        dh_h = int(val)
+        rem_m = (val - dh_h) * 100.0
+        dh_m = int(rem_m)
+        dh_s = int((rem_m - dh_m) * 100.0)
+        azimuth = frac * 360.0
+        decan = dh_h
+        # Cardinal direction
+        cardinals = ["N (Midnight)", "NNE", "NE", "ENE", "E (Dawn / Sunrise)", "ESE", "SE", "SSE",
+                     "S (Noon / Zenith)", "SSW", "SW", "WSW", "W (Dusk / Sunset)", "WNW", "NW", "NNW"]
+        idx = int(math.floor(((azimuth + 11.25) % 360.0) / 22.5))
+        cardinal = cardinals[idx % 16]
+
+        dh_info = {
+            "str": f"{dh_h:02d}.{dh_m:02d}.{dh_s:02d}",
+            "float": round(val, 4),
+            "azimuth_deg": round(azimuth, 2),
+            "cardinal": cardinal,
+            "decan": decan,
+            "standard": now_dt.strftime("%H:%M:%S")
+        }
+
+    # 2. Meeus Synodic Lunation & Moonphase
+    jd = unix_ts / 86400.0 + 2440587.5
+    lunation_num = int(math.floor((jd - 2451550.09766) / 29.530588861))
+
+    diff = now_dt - datetime(2001, 1, 1)
+    days = diff.days + (diff.seconds / 86400.0)
+    lunations = 0.20439731 + (days * 0.03386319269)
+    pos = lunations % 1.0
+
+    illum = round((1.0 - math.cos(pos * 2.0 * math.pi)) / 2.0 * 100.0, 1)
+    phase_idx = int(math.floor(pos * 8.0 + 0.5)) & 7
+    phases_en = ["New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous",
+                 "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent"]
+    phases_cz = ["Nov", "Dorůstající srpek", "První čtvrť", "Dorůstající Měsíc",
+                 "Úplněk", "Ubývající Měsíc", "Poslední čtvrť", "Ubývající srpek"]
+    icons = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+
+    return {
+        "unix_ts": unix_ts,
+        "cet_str": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "cet_date": now_dt.strftime("%Y-%m-%d"),
+        "cet_time": now_dt.strftime("%H:%M:%S"),
+        "dh36": dh_info,
+        "lunar": {
+            "lunation_number": lunation_num,
+            "position": round(pos, 3),
+            "illumination_pct": illum,
+            "phase_en": phases_en[phase_idx],
+            "phase_cz": phases_cz[phase_idx],
+            "icon": icons[phase_idx]
+        }
+    }
+
+def harvest_all(target_ts=None, scenario=None, warp_rate=1.0):
+    """
+    Harvests all subsystems into a unified telemetry state dictionary.
+    Supports counterfactual timeline forks (scenario) and timewarp rates.
+    """
+    time_data = harvest_time(target_ts)
+    grid_data = harvest_grid()
+    heat_data = harvest_heat()
+    weather_data = harvest_weather()
+
+    # Counterfactual timeline scenarios
+    scenario_branch = "CANONICAL"
+    if scenario:
+        sc_clean = scenario.lower().strip()
+        if sc_clean in ["blackout", "vypadek"]:
+            scenario_branch = "FORK/BLACKOUT"
+            grid_data["freq_hz"] = 47.200
+            grid_data["drift_mhz"] = -2800.0
+            grid_data["status"] = "EMERGENCY COLLAPSE"
+            heat_data["total_units"] = 0.0
+            for m in heat_data["meters"]:
+                m["last_hca"] = 0.0
+            weather_data["temp_c"] = -18.5
+            weather_data["pressure_hpa"] = 1038.0
+            weather_data["wind_kmh"] = 65.0
+        elif sc_clean in ["heatwave", "vedro"]:
+            scenario_branch = "FORK/HEATWAVE"
+            grid_data["freq_hz"] = 49.880
+            grid_data["drift_mhz"] = -120.0
+            grid_data["status"] = "PEAK AC LOAD"
+            heat_data["total_units"] = 0.0
+            for m in heat_data["meters"]:
+                m["last_hca"] = 0.0
+            weather_data["temp_c"] = 38.7
+            weather_data["rh_pct"] = 22
+            weather_data["pressure_hpa"] = 998.2
+        elif sc_clean in ["solar_flare", "geomag", "boure"]:
+            scenario_branch = "FORK/SOLAR_FLARE"
+            grid_data["freq_hz"] = 50.180
+            grid_data["drift_mhz"] = 180.0
+            grid_data["status"] = "GIC INDUCED SURGE"
+            weather_data["pressure_hpa"] = 958.0
+            weather_data["wind_kmh"] = 42.0
+        elif sc_clean in ["deep_winter", "mraz"]:
+            scenario_branch = "FORK/DEEP_WINTER"
+            grid_data["freq_hz"] = 49.920
+            grid_data["drift_mhz"] = -80.0
+            grid_data["status"] = "HIGH WINTER DRAW"
+            heat_data["total_units"] = 12450.0
+            for m in heat_data["meters"]:
+                m["last_hca"] = round(m["last_hca"] * 3.5, 1)
+            weather_data["temp_c"] = -12.3
+            weather_data["rh_pct"] = 95
+            weather_data["pressure_hpa"] = 962.0
+        elif sc_clean in ["borges", "zero_entropy"]:
+            scenario_branch = "FORK/BORGES (dS=0)"
+            grid_data["freq_hz"] = 50.0000
+            grid_data["drift_mhz"] = 0.0
+            grid_data["status"] = "ZERO ENTROPY (dS=0)"
+            time_data["dh36"]["str"] = "18.00.00"
+            time_data["dh36"]["decan"] = 18
+            time_data["dh36"]["azimuth_deg"] = 180.0
+            time_data["dh36"]["cardinal"] = "S (Noon / Zenith)"
+            heat_data["total_units"] = 3600.0
+            weather_data["temp_c"] = 18.0
+            weather_data["pressure_hpa"] = 1013.25
+        else:
+            scenario_branch = f"FORK/{sc_clean.upper()}"
+
+    return {
+        "time": time_data,
+        "grid": grid_data,
+        "heat": heat_data,
+        "weather": weather_data,
+        "scenario": scenario_branch,
+        "warp_rate": warp_rate
+    }
+
+# ==============================================================================
+# Vector Path Primitives (Paths compatible with GoMotor & SVG)
+# ==============================================================================
+
+def path_circle(cx, cy, r, segments=36):
+    pts = []
+    for i in range(segments + 1):
+        a = 2.0 * math.pi * i / segments
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return f"M {pts[0][0]:.2f},{pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in pts[1:])
+
+def path_line(x1, y1, x2, y2):
+    return f"M {x1:.2f},{y1:.2f} L {x2:.2f},{y2:.2f}"
+
+def path_rect(x, y, w, h):
+    return f"M {x:.2f},{y:.2f} L {x+w:.2f},{y:.2f} L {x+w:.2f},{y+h:.2f} L {x:.2f},{y+h:.2f} Z"
+
+def path_moon_phase(cx, cy, r, lunar_pos):
+    """
+    Renders an astronomical vector moon disc with exact illuminated crescent/gibbous terminator.
+    """
+    paths = []
+    # Outer circle
+    paths.append(path_circle(cx, cy, r, segments=32))
+
+    # Terminator curve
+    # Waxing: 0 < pos < 0.5 (right side lit); Waning: 0.5 < pos < 1.0 (left side lit)
+    k = math.cos(2.0 * math.pi * lunar_pos)
+    term_pts = []
+    steps = 18
+    for i in range(steps + 1):
+        # angle from top (-pi/2) to bottom (+pi/2)
+        a = -math.pi / 2.0 + math.pi * i / steps
+        tx = cx + r * k * math.cos(a)
+        ty = cy + r * math.sin(a)
+        term_pts.append((tx, ty))
+
+    d_term = f"M {term_pts[0][0]:.2f},{term_pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in term_pts[1:])
+    paths.append(d_term)
+
+    # Central fine reticle
+    paths.append(f"M {cx-1.2:.2f},{cy:.2f} L {cx+1.2:.2f},{cy:.2f}")
+    paths.append(f"M {cx:.2f},{cy-1.2:.2f} L {cx:.2f},{cy+1.2:.2f}")
+
+    return paths
+
+def path_astrolabe_dial(cx, cy, r, azimuth_deg, lunar_pos):
+    """
+    Generates a full circular Astrolabe Dial:
+    - 36 Decan tick marks (10° arc = 1.0 dh36)
+    - Cardinal ticks (0° North, 90° East, 180° South, 270° West) with letters N, E, S, W
+    - Azimuth hand pointing to metric dh36 azimuth
+    - Central vector moon phase disc
+    """
+    paths = []
+    r_outer = r
+    r_inner = r * 0.88
+    r_hub = r * 0.28
+
+    # Concentric outer circles
+    paths.append(path_circle(cx, cy, r_outer, segments=48))
+    paths.append(path_circle(cx, cy, r_inner, segments=48))
+    paths.append(path_circle(cx, cy, r_inner * 0.76, segments=36))
+
+    # 36 Decanic Ticks (Every 10°)
+    for i in range(36):
+        ang_deg = i * 10.0
+        rad = math.radians(ang_deg - 90.0)  # 0 deg is North (top)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        is_cardinal = (i % 9 == 0)
+        t_start = r_inner * 0.68 if is_cardinal else r_inner
+        t_end = r_outer
+
+        x1 = cx + t_start * cos_a
+        y1 = cy + t_start * sin_a
+        x2 = cx + t_end * cos_a
+        y2 = cy + t_end * sin_a
+        paths.append(path_line(x1, y1, x2, y2))
+
+    # Cardinal labels N, E, S, W
+    r_label = r_inner * 0.58
+    paths.extend(render_text_strokes("N", cx, cy - r_label - 1.2, char_w=1.4, char_h=2.0, align="center"))
+    paths.extend(render_text_strokes("E", cx + r_label, cy - 1.0, char_w=1.4, char_h=2.0, align="center"))
+    paths.extend(render_text_strokes("S", cx, cy + r_label - 1.0, char_w=1.4, char_h=2.0, align="center"))
+    paths.extend(render_text_strokes("W", cx - r_label, cy - 1.0, char_w=1.4, char_h=2.0, align="center"))
+
+    # Azimuth Pointer (Hand from center to current dh36 azimuth)
+    azim_rad = math.radians(azimuth_deg - 90.0)
+    hx = cx + (r_inner * 0.94) * math.cos(azim_rad)
+    hy = cy + (r_inner * 0.94) * math.sin(azim_rad)
+    # Needle stem
+    paths.append(path_line(cx + r_hub * math.cos(azim_rad), cy + r_hub * math.sin(azim_rad), hx, hy))
+    # Arrow tip
+    tip_ang1 = azim_rad + math.radians(150.0)
+    tip_ang2 = azim_rad - math.radians(150.0)
+    paths.append(path_line(hx, hy, hx + 3.0 * math.cos(tip_ang1), hy + 3.0 * math.sin(tip_ang1)))
+    paths.append(path_line(hx, hy, hx + 3.0 * math.cos(tip_ang2), hy + 3.0 * math.sin(tip_ang2)))
+
+    # Central Moon Phase disc
+    paths.extend(path_moon_phase(cx, cy, r_hub, lunar_pos))
+
+    return paths
+
+# ==============================================================================
+# SVG Layout Generators: Stamp ("Časové razidlo") & Strip (3-Track Seismograph)
+# ==============================================================================
+
+def generate_stamp_svg(telemetry, width_mm=120.0):
+    """
+    Generates the authentic "Časové razidlo" (Astrolabe Vector Seal).
+    Framed rectangular seal in Golden Ratio proportions: W = 120 mm, H = W / phi ~ 74.16 mm.
+    """
+    h_mm = width_mm / PHI
+    paths = []
+
+    # 1. Outer & Inner Borders (Golden Ratio phi)
+    paths.append(path_rect(1.0, 1.0, width_mm - 2.0, h_mm - 2.0))
+    paths.append(path_rect(2.8, 2.8, width_mm - 5.6, h_mm - 5.6))
+
+    # Corner filigree brackets
+    c_len = 5.0
+    # Top-Left
+    paths.append(path_line(4.5, 4.5, 4.5 + c_len, 4.5))
+    paths.append(path_line(4.5, 4.5, 4.5, 4.5 + c_len))
+    # Top-Right
+    paths.append(path_line(width_mm - 4.5, 4.5, width_mm - 4.5 - c_len, 4.5))
+    paths.append(path_line(width_mm - 4.5, 4.5, width_mm - 4.5, 4.5 + c_len))
+    # Bottom-Left
+    paths.append(path_line(4.5, h_mm - 4.5, 4.5 + c_len, h_mm - 4.5))
+    paths.append(path_line(4.5, h_mm - 4.5, 4.5, h_mm - 4.5 - c_len))
+    # Bottom-Right
+    paths.append(path_line(width_mm - 4.5, h_mm - 4.5, width_mm - 4.5 - c_len, h_mm - 4.5))
+    paths.append(path_line(width_mm - 4.5, h_mm - 4.5, width_mm - 4.5, h_mm - 4.5 - c_len))
+
+    # 2. Astrolabe Dial (Left Side)
+    dial_cx = 28.5
+    dial_cy = h_mm / 2.0
+    dial_r = 24.5
+    azimuth = telemetry["time"]["dh36"]["azimuth_deg"]
+    lunar_pos = telemetry["time"]["lunar"]["position"]
+    paths.extend(path_astrolabe_dial(dial_cx, dial_cy, dial_r, azimuth, lunar_pos))
+
+    # Vertical divider line between dial and typography
+    div_x = 56.5
+    paths.append(path_line(div_x, 4.5, div_x, h_mm - 4.5))
+    paths.append(path_line(div_x + 0.8, 6.0, div_x + 0.8, h_mm - 6.0))
+
+    # 3. Typography (Right Side)
+    t_x = div_x + 3.2
+    y_start = 6.2
+    pitch_y = 5.6
+
+    t_data = telemetry["time"]
+    g_data = telemetry["grid"]
+    h_data = telemetry["heat"]
+    w_data = telemetry["weather"]
+    branch = telemetry.get("scenario", "CANONICAL")
+
+    lines = [
+        ("OBSERVATOŘ // ČASOVÉ RAZIDLO", 1.8, 2.5),
+        (f"ČAS : {t_data['cet_str']} CET", 1.5, 2.3),
+        (f"DH36: {t_data['dh36']['str']} (DEKAN {t_data['dh36']['decan']:02d})", 1.5, 2.3),
+        (f"AZIM: {t_data['dh36']['azimuth_deg']:.1f}° {t_data['dh36']['cardinal'][:14]}", 1.5, 2.3),
+        (f"LUNA: {t_data['lunar']['lunation_number']}. LUNACE | {t_data['lunar']['illumination_pct']}%", 1.5, 2.3),
+        (f"SÍŤ : {g_data['freq_hz']:.3f} HZ (Δ {g_data['drift_mhz']:+.1f} MHZ)", 1.5, 2.3),
+        (f"OTOP: {h_data['total_units']:.1f} HCA | {h_data['total_meters']} MĚŘIDEL", 1.5, 2.3),
+        (f"METEO: {w_data['temp_c']:+.1f}°C | {w_data['pressure_hpa']:.0f} HPA | {w_data['rh_pct']}%", 1.5, 2.3),
+        (f"VĚTEV: {branch[:24]}", 1.4, 2.1),
+        ("--TÉCHNĒ & KOF // DRKOTA V-PLOTTER", 1.3, 1.9),
+    ]
+
+    for idx, (txt, cw, ch) in enumerate(lines):
+        cur_y = y_start + idx * pitch_y
+        paths.extend(render_text_strokes(txt, t_x, cur_y, char_w=cw, char_h=ch))
+
+    # Decorative horizontal divider under title
+    paths.append(path_line(t_x, y_start + 3.8, width_mm - 5.0, y_start + 3.8))
+
+    # Assemble SVG
+    d_attr = " ".join(paths)
+    svg = (
+        f'<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<svg width="{width_mm:.2f}mm" height="{h_mm:.2f}mm" viewBox="0 0 {width_mm:.2f} {h_mm:.2f}" '
+        f'xmlns="http://www.w3.org/2000/svg">\n'
+        f'  <g id="casove_razidlo">\n'
+        f'    <path d="{d_attr}" stroke="black" stroke-width="0.25" fill="none" stroke-linecap="round" stroke-linejoin="round" />\n'
+        f'  </g>\n'
+        f'</svg>\n'
+    )
+    return svg, width_mm, h_mm
+
+def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
+    """
+    Generates a 3-track seismograph strip:
+      - Header stamp at top
+      - Track 1: Grid 50Hz frequency & micro-deviation seismograph
+      - Track 2: Weather curves (temperature & pressure)
+      - Track 3: Wireless M-Bus radiator heat pulse bars (19 meters)
+      - Footer stamp
+    """
+    paths = []
+
+    # Outer border
+    paths.append(path_rect(2.0, 2.0, width_mm - 4.0, height_mm - 4.0))
+
+    # 1. Header Stamp Block (Top: 5 to 44 mm)
+    # Compact Astrolabe Dial at Left
+    header_cx = 24.0
+    header_cy = 23.5
+    header_r = 16.5
+    azimuth = telemetry["time"]["dh36"]["azimuth_deg"]
+    lunar_pos = telemetry["time"]["lunar"]["position"]
+    paths.extend(path_astrolabe_dial(header_cx, header_cy, header_r, azimuth, lunar_pos))
+
+    # Header Telemetry Text (Right)
+    ht_x = 46.0
+    paths.extend(render_text_strokes("DRKOTA CHRONICLE // 3-TRACK SEISMOGRAPH", ht_x, 8.0, char_w=1.7, char_h=2.4))
+    paths.append(path_line(ht_x, 11.5, width_mm - 6.0, 11.5))
+    paths.extend(render_text_strokes(f"ČAS : {telemetry['time']['cet_str']} CET", ht_x, 14.5, char_w=1.4, char_h=2.1))
+    paths.extend(render_text_strokes(f"DH36: {telemetry['time']['dh36']['str']} (DEKAN {telemetry['time']['dh36']['decan']:02d})", ht_x, 19.5, char_w=1.4, char_h=2.1))
+    paths.extend(render_text_strokes(f"LUNA: {telemetry['time']['lunar']['lunation_number']}. LUNACE ({telemetry['time']['lunar']['illumination_pct']}%)", ht_x, 24.5, char_w=1.4, char_h=2.1))
+    paths.extend(render_text_strokes(f"SÍŤ : {telemetry['grid']['freq_hz']:.3f} HZ | OTOP: {telemetry['heat']['total_units']:.0f} HCA", ht_x, 29.5, char_w=1.4, char_h=2.1))
+    paths.extend(render_text_strokes(f"METEO: {telemetry['weather']['temp_c']:+.1f}°C | {telemetry['weather']['pressure_hpa']:.0f} HPA", ht_x, 34.5, char_w=1.4, char_h=2.1))
+    paths.extend(render_text_strokes(f"VĚTEV: {telemetry.get('scenario', 'CANONICAL')}", ht_x, 39.5, char_w=1.3, char_h=1.9))
+
+    # Divider bar
+    paths.append(path_line(4.0, 44.5, width_mm - 4.0, 44.5))
+    paths.append(path_line(4.0, 45.3, width_mm - 4.0, 45.3))
+
+    # 2. Track 1: Grid 50Hz Seismograph (Y: 48 to 92 mm)
+    t1_top = 48.0
+    t1_h = 44.0
+    t1_mid = t1_top + t1_h / 2.0
+    paths.append(path_rect(6.0, t1_top, width_mm - 12.0, t1_h))
+    paths.extend(render_text_strokes("[STOPA 1: SÍŤ 50 HZ FREKVENCE & MIKRO-DEVIACE]", 9.0, t1_top + 3.0, char_w=1.4, char_h=2.0))
+
+    # Grid baseline (50.000 Hz)
+    paths.append(path_line(24.0, t1_mid, width_mm - 8.0, t1_mid))
+    # Threshold dashed guidelines (+20, +50, -20, -50 mHz)
+    for mhz, label in [(+50, "+50"), (+20, "+20"), (-20, "-20"), (-50, "-50")]:
+        y_pos = t1_mid - (mhz / 50.0) * (t1_h * 0.38)
+        # dashed line
+        x_cur = 24.0
+        while x_cur < width_mm - 8.0:
+            paths.append(path_line(x_cur, y_pos, min(x_cur + 2.5, width_mm - 8.0), y_pos))
+            x_cur += 5.0
+        paths.extend(render_text_strokes(label, 9.0, y_pos - 1.0, char_w=1.1, char_h=1.7))
+
+    paths.extend(render_text_strokes("50.0", 9.0, t1_mid - 1.0, char_w=1.1, char_h=1.7))
+
+    # Seismograph trace wave
+    cur_drift = telemetry["grid"]["drift_mhz"]
+    trace_pts = []
+    num_pts = 64
+    x_step = (width_mm - 34.0) / float(num_pts)
+    # Synthetic / inertia Markov walk seeded around actual drift
+    drift_val = cur_drift
+    for i in range(num_pts + 1):
+        xp = 25.0 + i * x_step
+        # Smooth wander
+        delta = math.sin(i * 0.35) * 6.0 + math.cos(i * 0.18) * 4.0
+        drift_point = drift_val + delta
+        # Clamp to +- 50 mHz range
+        clamped = max(-55.0, min(55.0, drift_point))
+        yp = t1_mid - (clamped / 50.0) * (t1_h * 0.38)
+        trace_pts.append((xp, yp))
+
+    d_trace = f"M {trace_pts[0][0]:.2f},{trace_pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in trace_pts[1:])
+    paths.append(d_trace)
+
+    # 3. Track 2: Weather Seismograph (Y: 96 to 140 mm)
+    t2_top = 96.0
+    t2_h = 44.0
+    t2_mid = t2_top + t2_h / 2.0
+    paths.append(path_rect(6.0, t2_top, width_mm - 12.0, t2_h))
+    paths.extend(render_text_strokes("[STOPA 2: METEO PRAHA - TEPLOTA & TLAK VZDUCHU]", 9.0, t2_top + 3.0, char_w=1.4, char_h=2.0))
+
+    # Axes
+    paths.extend(render_text_strokes("20°C", 9.0, t2_top + 8.0, char_w=1.1, char_h=1.6))
+    paths.extend(render_text_strokes("10°C", 9.0, t2_mid - 0.8, char_w=1.1, char_h=1.6))
+    paths.extend(render_text_strokes(" 0°C", 9.0, t2_top + t2_h - 4.0, char_w=1.1, char_h=1.6))
+
+    paths.extend(render_text_strokes("1010hPa", width_mm - 26.0, t2_top + 8.0, char_w=1.0, char_h=1.5))
+    paths.extend(render_text_strokes(" 980hPa", width_mm - 26.0, t2_mid - 0.8, char_w=1.0, char_h=1.5))
+    paths.extend(render_text_strokes(" 950hPa", width_mm - 26.0, t2_top + t2_h - 4.0, char_w=1.0, char_h=1.5))
+
+    # Temperature Curve (Solid)
+    temp_base = telemetry["weather"]["temp_c"]
+    temp_pts = []
+    for i in range(num_pts + 1):
+        xp = 25.0 + i * x_step
+        t_var = temp_base + math.sin(i * 0.22) * 2.5
+        norm_t = (t_var - 0.0) / 20.0  # 0..20 deg
+        yp = (t2_top + t2_h - 6.0) - norm_t * (t2_h - 14.0)
+        temp_pts.append((xp, yp))
+    paths.append(f"M {temp_pts[0][0]:.2f},{temp_pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in temp_pts[1:]))
+
+    # Pressure Curve (Dashed)
+    press_base = telemetry["weather"]["pressure_hpa"]
+    press_pts = []
+    for i in range(num_pts + 1):
+        xp = 25.0 + i * x_step
+        p_var = press_base + math.cos(i * 0.15) * 5.0
+        norm_p = (p_var - 950.0) / 60.0  # 950..1010 hPa
+        yp = (t2_top + t2_h - 6.0) - norm_p * (t2_h - 14.0)
+        press_pts.append((xp, yp))
+    for i in range(0, len(press_pts) - 1, 2):
+        paths.append(path_line(press_pts[i][0], press_pts[i][1], press_pts[i+1][0], press_pts[i+1][1]))
+
+    # 4. Track 3: Wireless M-Bus Radiator Heat Pulses (Y: 144 to 194 mm)
+    t3_top = 144.0
+    t3_h = 50.0
+    t3_base_y = t3_top + t3_h - 8.0
+    paths.append(path_rect(6.0, t3_top, width_mm - 12.0, t3_h))
+    paths.extend(render_text_strokes(f"[STOPA 3: OTOP - 19 MĚŘIDEL WIRELESS M-BUS (CELKEM {telemetry['heat']['total_units']:.0f} HCA)]", 9.0, t3_top + 3.0, char_w=1.4, char_h=2.0))
+
+    # Baseline for meters
+    paths.append(path_line(12.0, t3_base_y, width_mm - 12.0, t3_base_y))
+
+    meters = telemetry["heat"]["meters"][:19]
+    max_hca = max([m.get("last_hca", 100.0) for m in meters] + [300.0])
+    bar_pitch = (width_mm - 28.0) / 19.0
+
+    for i, m in enumerate(meters):
+        bx = 15.0 + i * bar_pitch
+        hca = float(m.get("last_hca", 0.0))
+        bh = (hca / max_hca) * 32.0
+        # Draw vertical pulse impulse bar with needle head
+        by_top = t3_base_y - bh
+        paths.append(path_line(bx, t3_base_y, bx, by_top))
+        # Top needle tick
+        paths.append(path_line(bx - 1.2, by_top, bx + 1.2, by_top))
+        # Meter tick on baseline
+        paths.append(path_line(bx, t3_base_y, bx, t3_base_y + 1.8))
+        # Label every 2nd meter
+        if i % 2 == 0:
+            paths.extend(render_text_strokes(f"{i+1:02d}", bx, t3_base_y + 3.2, char_w=0.9, char_h=1.4, align="center"))
+
+    # 5. Footer (Y: 198 to 207 mm)
+    paths.append(path_line(4.0, 197.0, width_mm - 4.0, 197.0))
+    paths.extend(render_text_strokes("DRKOTA CHRONICLE // OBSERVATOŘ CYBERNETICS // --TÉCHNĒ & KOF", 8.0, 201.5, char_w=1.4, char_h=2.0))
+    paths.extend(render_text_strokes(f"PHI = {PHI:.4f}", width_mm - 32.0, 201.5, char_w=1.3, char_h=1.9))
+
+    # Assemble SVG
+    d_attr = " ".join(paths)
+    svg = (
+        f'<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<svg width="{width_mm:.2f}mm" height="{height_mm:.2f}mm" viewBox="0 0 {width_mm:.2f} {height_mm:.2f}" '
+        f'xmlns="http://www.w3.org/2000/svg">\n'
+        f'  <g id="drkota_seismograph_strip">\n'
+        f'    <path d="{d_attr}" stroke="black" stroke-width="0.25" fill="none" stroke-linecap="round" stroke-linejoin="round" />\n'
+        f'  </g>\n'
+        f'</svg>\n'
+    )
+    return svg, width_mm, height_mm
+
+# ==============================================================================
+# Plotter Dispatcher
+# ==============================================================================
+
+def dispatch_plot(svg_path, args, mode="plot"):
+    """
+    Handles --svg-only, --dry-run, or physical Drkota dispatch via ~/bin/drkota.
+    """
+    scale = getattr(args, "scale", DEFAULT_DRKOTA_SCALE)
     if args.dry_run:
-        print("[*] Dry run: příkaz pro Drkotu nebyl odeslán.")
+        print("\n[DRY-RUN] Běh v simulačním režimu (bez pohybu hardwaru):")
+        print(f"  • Vygenerovaný SVG soubor: {svg_path}")
+        print(f"  • Velikost souboru       : {os.path.getsize(svg_path)} bajtů")
+        print(f"  • Plánovaný příkaz       : {DRKOTA_BIN} plot {svg_path} --scale {scale}")
         return
 
-    # Plot seal via drkota text
-    cmd = ["drkota", "text", stamp_text]
-    print(f"[*] Odesílám na Drkotu: {' '.join(cmd)}")
-    subprocess.run(cmd)
+    if getattr(args, "plot", False):
+        if not os.path.exists(DRKOTA_BIN):
+            print(f"[-] Chyba: Ovladač Drkoty '{DRKOTA_BIN}' nebyl nalezen.")
+            sys.exit(1)
+        cmd = [DRKOTA_BIN, "plot", svg_path, "--scale", str(scale)]
+        if getattr(args, "center", False):
+            cmd.append("--center")
+        print(f"[*] Odesílám vektorovou kresbu na Drkotu: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+    else:
+        print(f"[+] SVG uloženo do: {svg_path}")
+        print(f"    Pro fyzické vykreslení spusťte: drkota plot {svg_path} (nebo použijte přepínač --plot)")
+
+# ==============================================================================
+# CLI Commands
+# ==============================================================================
+
+def cmd_stamp(args):
+    """
+    Generates and optionally plots the 'Časové razidlo' (Astrolabe Seal).
+    """
+    telemetry = harvest_all(scenario=getattr(args, "fork", None))
+    svg_data, w, h = generate_stamp_svg(telemetry, width_mm=args.width)
+
+    out_path = args.svg_only if args.svg_only else f"/tmp/drkota_stamp_{int(time.time())}.svg"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(svg_data)
+
+    print("╔══════════════════════════════════════════════════════════════════════════╗")
+    print("║ OBSERVATOŘ // ČASOVÉ RAZIDLO (ASTROLABE SEAL)                            ║")
+    print("╠══════════════════════════════════════════════════════════════════════════╣")
+    print(f"║ Občanský čas   : {telemetry['time']['cet_str']} CET                    ║")
+    print(f"║ Metrický čas   : {telemetry['time']['dh36']['str']} (Dekan {telemetry['time']['dh36']['decan']:02d} | Azimut {telemetry['time']['dh36']['azimuth_deg']:.1f}°) ║")
+    print(f"║ Lunace & Fáze  : {telemetry['time']['lunar']['lunation_number']}. lunace | {telemetry['time']['lunar']['illumination_pct']}% {telemetry['time']['lunar']['phase_cz']} {telemetry['time']['lunar']['icon']}   ║")
+    print(f"║ 50Hz Síť       : {telemetry['grid']['freq_hz']:.3f} Hz (Δ {telemetry['grid']['drift_mhz']:+.1f} mHz) [{telemetry['grid']['status']}]             ║")
+    print(f"║ Otopné jednotky: {telemetry['heat']['total_units']:.1f} HCA ({telemetry['heat']['total_meters']} měřidel)                          ║")
+    print(f"║ Počasí Praha   : {telemetry['weather']['temp_c']:+.1f}°C | {telemetry['weather']['pressure_hpa']:.1f} hPa | {telemetry['weather']['rh_pct']}% RH          ║")
+    print(f"║ Formát razidla : {w:.1f} x {h:.1f} mm (Zlatý řez φ = {PHI:.4f})                ║")
+    print("╚══════════════════════════════════════════════════════════════════════════╝")
+
+    if args.json:
+        print(json.dumps(telemetry, indent=2, ensure_ascii=False))
+        return
+
+    dispatch_plot(out_path, args, mode="stamp")
 
 def cmd_strip(args):
-    """Realtime telemetry strip chart plotting."""
-    print(f"[*] Spouštím v-plotter strip chart pro živou telemetrii (interval {args.interval}s, body: {args.points})...")
-    for i in range(args.points):
-        grid = get_grid_telemetry()
-        dh = get_dh36()
-        freq = grid.get("frequency_hz", 50.0)
-        drift = grid.get("drift_mhz", 0.0)
-        # 1 mHz deviation = 0.2 mm vertical offset
-        dy = int(drift * 0.2)
-        dx = 5  # 5 mm advance per sample
-        print(f"[{i+1}/{args.points}] {dh['dh_str']} -> Freq {freq:.3f} Hz (drift {drift:+.1f} mHz) -> krok dx={dx} dy={dy}")
-        if not args.dry_run:
-            subprocess.run(["drkota", "move", str(dx), str(dy)])
-        time.sleep(args.interval)
+    """
+    Generates and optionally plots the 3-track seismograph chronogram strip.
+    """
+    telemetry = harvest_all(scenario=getattr(args, "fork", None))
+    svg_data, w, h = generate_strip_svg(telemetry, width_mm=args.width, height_mm=args.height)
+
+    out_path = args.svg_only if args.svg_only else f"/tmp/drkota_strip_{int(time.time())}.svg"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(svg_data)
+
+    print("╔══════════════════════════════════════════════════════════════════════════╗")
+    print("║ OBSERVATOŘ // 3-TRACK SEISMOGRAPH CHRONOGRAM                             ║")
+    print("╠══════════════════════════════════════════════════════════════════════════╣")
+    print(f"║ Stopa 1: Kontinentální síť 50 Hz ({telemetry['grid']['freq_hz']:.3f} Hz, drift {telemetry['grid']['drift_mhz']:+.1f} mHz)        ║")
+    print(f"║ Stopa 2: Meteo Praha (Teplota {telemetry['weather']['temp_c']:+.1f}°C, Tlak {telemetry['weather']['pressure_hpa']:.1f} hPa)          ║")
+    print(f"║ Stopa 3: Otopná tělesa ({telemetry['heat']['total_meters']} vysílačů M-Bus, celkem {telemetry['heat']['total_units']:.1f} HCA)        ║")
+    print(f"║ Páskový formát: {w:.1f} x {h:.1f} mm (Vektorový seismograf pro Drkotu)          ║")
+    print("╚══════════════════════════════════════════════════════════════════════════╝")
+
+    if args.json:
+        print(json.dumps(telemetry, indent=2, ensure_ascii=False))
+        return
+
+    dispatch_plot(out_path, args, mode="strip")
 
 def cmd_warp(args):
-    """Replays trajectory using timewarp scaling."""
-    speed = args.factor
-    print(f"[*] Aktivuji Timewarp replay s faktorem {speed}x...")
-    print(f"    Přehrávám vektorovou kroniku Drkoty v čase dT/dτ = {speed}...")
-    if speed < 0:
-        print("    [!] Detekován retrográdní tok času (dT/dτ < 0). Vykresluji boustrofédon v opačném směru.")
-    print("[+] Timewarp sekvence synchronizována.")
+    """
+    Timewarp replay and simulation mode (using timewarp-alpine / libtimewarp rate scaling).
+    Supports numeric rate (e.g. 60.0 for 1 hr/min, -60.0 for retrograde) or 'palindrome'.
+    """
+    rate_arg = args.rate.lower().strip() if isinstance(args.rate, str) else str(args.rate)
+    now_ts = time.time()
+
+    is_palindrome = (rate_arg in ["palindrome", "p", "decan"])
+    try:
+        rate_val = 1.0 if is_palindrome else float(rate_arg)
+    except ValueError:
+        print(f"[-] Neplatná rychlost timewarpu: '{rate_arg}'. Použijte číslo (např. 60, -1) nebo 'palindrome'.")
+        sys.exit(1)
+
+    print(f"[*] Inicializuji Timewarp Chronograf:")
+    if is_palindrome:
+        print(f"    • Režim: PALINDROMICKÁ DEKANICKÁ VLNA (1/36 dne = 2400 s / 10° rotace Země)")
+        # Calculate triangle wave phase
+        half_p = 2400.0
+        phase = math.fmod(now_ts, 2.0 * half_p)
+        offset = phase if phase <= half_p else (2.0 * half_p - phase)
+        sim_ts = now_ts + (offset - half_p / 2.0)
+    else:
+        print(f"    • Režim: LINEÁRNÍ ŠKÁLOVÁNÍ ČASU (dT/dτ = {rate_val:+.2f} s/s)")
+        if rate_val < 0:
+            print(f"    • Směr : ▼ RETROGRÁDNÍ TOK ČASU (procházení historie zpět v čase)")
+        else:
+            print(f"    • Směr : ▲ PROGRÁDNÍ TOK ČASU (zrychlená simulace dopředu)")
+        # Simulate jump of 1 hour scaled by rate
+        sim_ts = now_ts + (rate_val * 360.0)
+
+    telemetry = harvest_all(target_ts=sim_ts, warp_rate=rate_val)
+    telemetry["scenario"] = f"WARP[{rate_arg.upper()}]"
+
+    svg_data, w, h = generate_strip_svg(telemetry, width_mm=args.width, height_mm=args.height)
+    out_path = args.svg_only if args.svg_only else f"/tmp/drkota_warp_{rate_arg}_{int(time.time())}.svg"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(svg_data)
+
+    print(f"[+] Timewarp chronogram vygenerován pro virtuální čas T = {telemetry['time']['cet_str']} CET")
+    dispatch_plot(out_path, args, mode="warp")
 
 def cmd_fork(args):
-    """Forks current timeline into a new branch."""
-    ensure_chronicle_dir()
-    branch_name = args.name
-    with open(TIMELINES_FILE, "r") as f:
-        data = json.load(f)
-    if branch_name in data["branches"]:
-        print(f"[-] Větev '{branch_name}' již existuje. Přepínám na ni.")
-    else:
-        data["branches"][branch_name] = {"fork_point": time.time(), "parent": data["active_branch"], "events": []}
-        print(f"[+] Vytvořena nová časová větev Drkoty: '{branch_name}' odvozená z '{data['active_branch']}'.")
-    data["active_branch"] = branch_name
-    with open(TIMELINES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-    print(f"[*] Aktivní časová osa Drkoty nastavena na: '{branch_name}'.")
+    """
+    Forks alternative counterfactual timeline scenarios.
+    Scenarios: blackout, heatwave, solar_flare, deep_winter, borges
+    """
+    scenario = args.scenario
+    print(f"[*] Rozvětvuji kauzalitu: aktivována větev '{scenario.upper()}'...")
+    telemetry = harvest_all(scenario=scenario)
 
-def cmd_status(args):
-    ensure_chronicle_dir()
-    with open(TIMELINES_FILE, "r") as f:
-        data = json.load(f)
-    dh = get_dh36()
-    grid = get_grid_telemetry()
-    print("=== DRKOTA CHRONICLE & TELEMETRY STATUS ===")
-    print(f"Aktivní větev    : {data.get('active_branch', 'main')}")
-    print(f"Všechny větve    : {list(data.get('branches', {}).keys())}")
-    print(f"Metrický čas dh36: {dh['dh_str']} (Azimut {dh['azimuth']:.1f}°, Decan {dh['decan']}/36)")
-    print(f"50Hz Síť         : {grid.get('frequency_hz', 50.0):.3f} Hz (drift {grid.get('drift_mhz', 0.0):+.1f} mHz, {grid.get('status', 'OK')})")
-    print(f"Drkota hostitel  : {REMOTE_HOST} (/dev/ttyUSB0)")
+    svg_data, w, h = generate_stamp_svg(telemetry, width_mm=args.width)
+    out_path = args.svg_only if args.svg_only else f"/tmp/drkota_fork_{scenario}_{int(time.time())}.svg"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(svg_data)
+
+    print(f"[+] Alternativní časová osa '{telemetry['scenario']}' zapečetěna do razidla:")
+    print(f"    • Síť   : {telemetry['grid']['freq_hz']:.3f} Hz [{telemetry['grid']['status']}]")
+    print(f"    • Otop  : {telemetry['heat']['total_units']:.1f} HCA")
+    print(f"    • Meteo : {telemetry['weather']['temp_c']:+.1f}°C, {telemetry['weather']['pressure_hpa']:.1f} hPa")
+
+    dispatch_plot(out_path, args, mode="fork")
+
+def cmd_realtime(args):
+    """
+    Realtime ticker / continuous monitoring daemon.
+    Periodically samples telemetry and updates the live chronogram.
+    """
+    interval = args.interval
+    max_count = args.count
+    print(f"[*] Spouštím Realtime Telemetrický Ticker pro Drkotu:")
+    print(f"    • Vzorkovací interval: {interval} s")
+    print(f"    • Maximální počet    : {max_count if max_count > 0 else 'nekonečno (Ctrl+C pro ukončení)'}")
+
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            telemetry = harvest_all()
+            t_str = telemetry["time"]["cet_time"]
+            dh = telemetry["time"]["dh36"]["str"]
+            hz = telemetry["grid"]["freq_hz"]
+            drift = telemetry["grid"]["drift_mhz"]
+            hca = telemetry["heat"]["total_units"]
+            tc = telemetry["weather"]["temp_c"]
+
+            out_path = args.svg_only if args.svg_only else "/tmp/drkota_chronicle_live.svg"
+            svg_data, _, _ = generate_stamp_svg(telemetry)
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(svg_data)
+
+            print(f"[{iteration:03d} | {t_str}] DH36: {dh} | Síť: {hz:.3f} Hz ({drift:+.1f} mHz) | Otop: {hca:.0f} HCA | Meteo: {tc:+.1f}°C -> {out_path}")
+
+            if args.plot and not args.dry_run:
+                dispatch_plot(out_path, args, mode="realtime")
+
+            if max_count > 0 and iteration >= max_count:
+                print("[+] Dosažen maximální počet vzorků. Ukončuji.")
+                break
+
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n[*] Realtime ticker přerušen operátorem. Časové razidlo uloženo.")
+
+# ==============================================================================
+# Main Argument Parser
+# ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Drkota Chronicle & Telemetry Suite")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        description="drkota-chronicle — Unified Timewarp + Grid + Weather + Heat + Časové Razidlo Engine"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Režim vykreslování / chronografu")
+
+    # Global options for subcommands
+    def add_common_args(p):
+        p.add_argument("--svg-only", type=str, metavar="PATH", help="Pouze vygeneruje SVG do zadané cesty a skončí")
+        p.add_argument("--dry-run", action="store_true", help="Simulační běh bez odeslání příkazů na motory Drkoty")
+        p.add_argument("--plot", action="store_true", help="Fyzicky odešle vygenerovaný soubor na Drkotu (přes drkota plot)")
+        p.add_argument("--scale", type=float, default=DEFAULT_DRKOTA_SCALE, help=f"Měřítko pro Drkotu (výchozí {DEFAULT_DRKOTA_SCALE})")
+        p.add_argument("--center", action="store_true", help="Vystředí kresbu na kreslicí ploše Drkoty")
+        p.add_argument("--json", action="store_true", help="Vypíše nasbíranou telemetrii ve formátu JSON")
+        p.add_argument("-v", "--verbose", action="store_true", help="Podrobný diagnostický výpis")
 
     # stamp
-    p_stamp = subparsers.add_parser("stamp", help="Vykreslí Časové razidlo (time seal)")
-    p_stamp.add_argument("--dry-run", action="store_true", help="Pouze vygeneruje text bez fyzického kreslení")
+    p_stamp = subparsers.add_parser("stamp", help="Generuje 'Časové razidlo' (astrolábové pečetidlo se zlatým řezem φ)")
+    p_stamp.add_argument("--width", type=float, default=120.0, help="Šířka razidla v mm (výchozí 120 mm, výška = 120 / φ)")
+    p_stamp.add_argument("--fork", type=str, help="Volitelná alternativní větev kauzality pro razidlo")
+    add_common_args(p_stamp)
 
-    # strip / realtime
-    p_strip = subparsers.add_parser("strip", aliases=["realtime"], help="Živé vykreslování telemetrie na páskový graf")
-    p_strip.add_argument("--interval", type=float, default=2.0, help="Interval vzorkování v sekundách")
-    p_strip.add_argument("--points", type=int, default=10, help="Počet bodů k vykreslení")
-    p_strip.add_argument("--dry-run", action="store_true", help="Pouze simuluje body")
+    # strip
+    p_strip = subparsers.add_parser("strip", help="Generuje 3-stopý seismografický chronogram (Síť 50Hz + Meteo + Otop)")
+    p_strip.add_argument("--width", type=float, default=140.0, help="Šířka seismografického pásu v mm (výchozí 140 mm)")
+    p_strip.add_argument("--height", type=float, default=210.0, help="Výška seismografického pásu v mm (výchozí 210 mm = A5)")
+    p_strip.add_argument("--fork", type=str, help="Volitelná alternativní větev kauzality pro seismograf")
+    add_common_args(p_strip)
 
     # warp
-    p_warp = subparsers.add_parser("warp", help="Přehrávání trajektorie s timewarpem")
-    p_warp.add_argument("factor", type=float, default=1.0, nargs="?", help="Časový faktor (např. 36 pro zrychlení 36x, nebo -1 pro retrográdní)")
+    p_warp = subparsers.add_parser("warp", help="Přehrávání a simulace časových posunů a timewarpu")
+    p_warp.add_argument("rate", default="1.0", nargs="?", help="Škála rychlosti času (např. 60 pro 60x, -60 pro retrográdní, nebo 'palindrome')")
+    p_warp.add_argument("--width", type=float, default=140.0, help="Šířka v mm")
+    p_warp.add_argument("--height", type=float, default=210.0, help="Výška v mm")
+    add_common_args(p_warp)
 
     # fork
-    p_fork = subparsers.add_parser("fork", help="Rozvětví kreslicí časovou osu")
-    p_fork.add_argument("name", type=str, help="Název nové větve časové osy")
+    p_fork = subparsers.add_parser("fork", help="Rozvětvení do alternativních scénářů (blackout, heatwave, solar_flare, deep_winter, borges)")
+    p_fork.add_argument("scenario", choices=["blackout", "heatwave", "solar_flare", "deep_winter", "borges"],
+                        help="Kauzální scénář alternativní reality")
+    p_fork.add_argument("--width", type=float, default=120.0, help="Šířka razidla v mm")
+    add_common_args(p_fork)
 
-    # status
-    p_status = subparsers.add_parser("status", help="Zobrazí stav kroniky a telemetrie")
+    # realtime
+    p_realtime = subparsers.add_parser("realtime", help="Živý telemetrický ticker s periodickým vzorkováním")
+    p_realtime.add_argument("--interval", type=float, default=60.0, help="Perioda vzorkování v sekundách (výchozí 60 s)")
+    p_realtime.add_argument("--count", type=int, default=0, help="Počet iterací (0 = nekonečný běh)")
+    add_common_args(p_realtime)
 
     args = parser.parse_args()
+
     if args.command == "stamp":
         cmd_stamp(args)
-    elif args.command in ["strip", "realtime"]:
+    elif args.command == "strip":
         cmd_strip(args)
     elif args.command == "warp":
         cmd_warp(args)
     elif args.command == "fork":
         cmd_fork(args)
-    elif args.command == "status":
-        cmd_status(args)
+    elif args.command == "realtime":
+        cmd_realtime(args)
 
 if __name__ == "__main__":
     main()
