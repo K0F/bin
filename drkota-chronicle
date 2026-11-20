@@ -1285,7 +1285,7 @@ def main():
 
     # stamp
     p_stamp = subparsers.add_parser("stamp", help="Generuje 'Časové razidlo' (astrolábové pečetidlo se zlatým řezem φ)")
-    p_stamp.add_argument("--width", type=float, default=165.0, help="Šířka razidla v mm (výchozí 165 mm, výška = 165 / φ)")
+    p_stamp.add_argument("--width", type=float, default=105.0, help="Šířka razidla v mm (výchozí 105 mm, výška = 105 / φ ~ 65 mm)")
     p_stamp.add_argument("--fork", type=str, help="Volitelná alternativní větev kauzality pro razidlo")
     add_common_args(p_stamp)
 
