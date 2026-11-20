@@ -23,6 +23,7 @@ import sys
 import time
 import json
 import math
+import shutil
 import sqlite3
 import argparse
 import subprocess
@@ -1059,15 +1060,43 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
 # Plotter Dispatcher
 # ==============================================================================
 
+def convert_svg_to_png(svg_path, width_px=1400):
+    """
+    Automatically converts rendered SVG to high-resolution PNG companion.
+    Prioritizes /usr/bin/rsvg-convert (fastest), falls back to inkscape or ImageMagick convert.
+    """
+    if not os.path.exists(svg_path):
+        return None
+    base, _ = os.path.splitext(svg_path)
+    png_path = f"{base}.png"
+    try:
+        if shutil.which("rsvg-convert"):
+            subprocess.run(["rsvg-convert", "-w", str(width_px), svg_path, "-o", png_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return png_path
+        elif shutil.which("inkscape"):
+            subprocess.run(["inkscape", svg_path, f"--export-filename={png_path}", f"--export-width={width_px}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return png_path
+        elif shutil.which("convert"):
+            subprocess.run(["convert", "-density", "300", svg_path, png_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return png_path
+    except Exception as e:
+        sys.stderr.write(f"[-] SVG->PNG konverze selhala: {e}\n")
+        return None
+    return None
+
 def dispatch_plot(svg_path, args, mode="plot"):
     """
     Handles --svg-only, --dry-run, or physical Drkota dispatch via ~/bin/drkota.
+    Also automatically renders a high-res PNG companion alongside the SVG.
     """
+    png_path = convert_svg_to_png(svg_path)
     scale = getattr(args, "scale", DEFAULT_DRKOTA_SCALE)
     if args.dry_run:
         print("\n[DRY-RUN] Běh v simulačním režimu (bez pohybu hardwaru):")
         print(f"  • Vygenerovaný SVG soubor: {svg_path}")
         print(f"  • Velikost souboru       : {os.path.getsize(svg_path)} bajtů")
+        if png_path and os.path.exists(png_path):
+            print(f"  • Vygenerovaný PNG náhled: {png_path} ({os.path.getsize(png_path)} bajtů)")
         print(f"  • Plánovaný příkaz       : {DRKOTA_BIN} plot {svg_path} --scale {scale}")
         return
 
@@ -1082,6 +1111,8 @@ def dispatch_plot(svg_path, args, mode="plot"):
         subprocess.run(cmd, check=True)
     else:
         print(f"[+] SVG uloženo do: {svg_path}")
+        if png_path and os.path.exists(png_path):
+            print(f"[+] PNG náhled vygenerován: {png_path} ({os.path.getsize(png_path)} bajtů)")
         print(f"    Pro fyzické vykreslení spusťte: drkota plot {svg_path} (nebo použijte přepínač --plot)")
 
 # ==============================================================================
