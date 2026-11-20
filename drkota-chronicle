@@ -566,6 +566,104 @@ def path_line(x1, y1, x2, y2):
 def path_rect(x, y, w, h):
     return f"M {x:.2f},{y:.2f} L {x+w:.2f},{y:.2f} L {x+w:.2f},{y+h:.2f} L {x:.2f},{y+h:.2f} Z"
 
+def path_arc(cx, cy, r, start_rad, end_rad, segments=24):
+    pts = []
+    span = end_rad - start_rad
+    for i in range(segments + 1):
+        a = start_rad + span * (i / float(segments))
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return f"M {pts[0][0]:.2f},{pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in pts[1:])
+
+def path_lagrange_constellation(cx, cy, r_max, azimuth_deg, lunar_pos):
+    """
+    Renders the Three-Body Lagrange Constellation (Sun, Earth, Moon):
+      - 3 celestial bodies: Earth (center), Sun (solar vector), Moon (synodic vector)
+      - Always the two distant Lagrange points for each system:
+          * Sun-Earth: L2 (deep space shadow) and L3 (anti-Earth beyond Sun)
+          * Sun-Earth Trojans: L4 & L5 (equilateral vertices at +-60 deg)
+          * Earth-Moon: L2M (beyond Moon far side)
+      - Delicate vector constellation lines (asterism) connecting celestial equilibrium nodes
+    """
+    paths = []
+    sun_rad = math.radians(azimuth_deg - 90.0)
+    moon_rad = sun_rad + lunar_pos * 2.0 * math.pi
+
+    # 1. Earth at center (circle with cross)
+    r_earth = max(1.2, r_max * 0.08)
+    paths.append(path_circle(cx, cy, r_earth, segments=16))
+    paths.append(path_line(cx - r_earth, cy, cx + r_earth, cy))
+    paths.append(path_line(cx, cy - r_earth, cx, cy + r_earth))
+
+    # 2. Sun (SOL)
+    d_sun = r_max * 0.55
+    sx = cx + d_sun * math.cos(sun_rad)
+    sy = cy + d_sun * math.sin(sun_rad)
+    r_sun = max(1.5, r_max * 0.10)
+    paths.append(path_circle(sx, sy, r_sun, segments=20))
+    for ang in [0, math.pi/2, math.pi, 3*math.pi/2]:
+        paths.append(path_line(sx + r_sun * math.cos(ang), sy + r_sun * math.sin(ang),
+                               sx + (r_sun + 1.0) * math.cos(ang), sy + (r_sun + 1.0) * math.sin(ang)))
+    paths.extend(render_text_strokes("SOL", sx + 1.8, sy - 1.8, char_w=0.8, char_h=1.2, align="left"))
+
+    # 3. Moon (LUNA)
+    d_moon = r_max * 0.32
+    mx = cx + d_moon * math.cos(moon_rad)
+    my = cy + d_moon * math.sin(moon_rad)
+    r_moon = max(1.0, r_max * 0.06)
+    paths.append(path_circle(mx, my, r_moon, segments=16))
+    paths.extend(render_text_strokes("LUNA", mx + 1.5, my - 1.5, char_w=0.7, char_h=1.0, align="left"))
+
+    # 4. Sun-Earth Distant Collinear Points: L2 (Night Shadow) and L3 (Anti-Earth)
+    d_l2 = r_max * 0.78
+    l2_rad = sun_rad + math.pi
+    l2_x = cx + d_l2 * math.cos(l2_rad)
+    l2_y = cy + d_l2 * math.sin(l2_rad)
+    s_l2 = 1.2
+    paths.append(f"M {l2_x:.2f},{l2_y-s_l2:.2f} L {l2_x+s_l2:.2f},{l2_y:.2f} L {l2_x:.2f},{l2_y+s_l2:.2f} L {l2_x-s_l2:.2f},{l2_y:.2f} Z")
+    paths.extend(render_text_strokes("L2", l2_x + 1.6, l2_y - 1.3, char_w=0.8, char_h=1.2, align="left"))
+
+    d_l3 = r_max * 0.85
+    l3_rad = sun_rad
+    l3_x = cx + d_l3 * math.cos(l3_rad)
+    l3_y = cy + d_l3 * math.sin(l3_rad)
+    s_l3 = 1.2
+    paths.append(f"M {l3_x:.2f},{l3_y-s_l3:.2f} L {l3_x+s_l3:.2f},{l3_y:.2f} L {l3_x:.2f},{l3_y+s_l3:.2f} L {l3_x-s_l3:.2f},{l3_y:.2f} Z")
+    paths.extend(render_text_strokes("L3", l3_x + 1.6, l3_y - 1.3, char_w=0.8, char_h=1.2, align="left"))
+
+    # 5. Sun-Earth Distant Trojan Equilateral Points: L4 and L5 (+-60 deg)
+    l4_rad = sun_rad + math.pi / 3.0
+    l5_rad = sun_rad - math.pi / 3.0
+    l4_x = cx + d_sun * math.cos(l4_rad)
+    l4_y = cy + d_sun * math.sin(l4_rad)
+    l5_x = cx + d_sun * math.cos(l5_rad)
+    l5_y = cy + d_sun * math.sin(l5_rad)
+    for px, py, lbl in [(l4_x, l4_y, "L4"), (l5_x, l5_y, "L5")]:
+        paths.append(path_line(px - 1.0, py, px + 1.0, py))
+        paths.append(path_line(px, py - 1.0, px, py + 1.0))
+        paths.extend(render_text_strokes(lbl, px + 1.5, py - 1.3, char_w=0.75, char_h=1.1, align="left"))
+
+    # 6. Earth-Moon Distant Lagrange point: L2M (beyond Moon far side)
+    d_l2m = d_moon + r_max * 0.16
+    l2m_x = cx + d_l2m * math.cos(moon_rad)
+    l2m_y = cy + d_l2m * math.sin(moon_rad)
+    paths.append(path_line(l2m_x - 0.7, l2m_y, l2m_x + 0.7, l2m_y))
+    paths.append(path_line(l2m_x, l2m_y - 0.7, l2m_x, l2m_y + 0.7))
+    paths.extend(render_text_strokes("L2M", l2m_x + 1.2, l2m_y - 1.0, char_w=0.6, char_h=0.9, align="left"))
+
+    # 7. Constellation Asterism Lines (Čáry souhvězdí)
+    paths.append(path_line(l3_x, l3_y, sx, sy))
+    paths.append(path_line(sx, sy, cx, cy))
+    paths.append(path_line(cx, cy, l2_x, l2_y))
+    paths.append(path_line(sx, sy, l4_x, l4_y))
+    paths.append(path_line(l4_x, l4_y, cx, cy))
+    paths.append(path_line(sx, sy, l5_x, l5_y))
+    paths.append(path_line(l5_x, l5_y, cx, cy))
+    paths.append(path_line(cx, cy, mx, my))
+    paths.append(path_line(mx, my, l2m_x, l2m_y))
+    paths.append(path_arc(cx, cy, d_sun, min(l5_rad, l4_rad), max(l5_rad, l4_rad), segments=20))
+
+    return paths
+
 def path_moon_phase(cx, cy, r, lunar_pos):
     """
     Renders an astronomical vector moon disc with exact illuminated crescent/gibbous terminator.
@@ -636,6 +734,9 @@ def path_astrolabe_dial(cx, cy, r, azimuth_deg, lunar_pos):
     paths.extend(render_text_strokes("E", cx + r_label, cy - 1.0, char_w=1.4, char_h=2.0, align="center"))
     paths.extend(render_text_strokes("S", cx, cy + r_label - 1.0, char_w=1.4, char_h=2.0, align="center"))
     paths.extend(render_text_strokes("W", cx - r_label, cy - 1.0, char_w=1.4, char_h=2.0, align="center"))
+
+    # Three-Body Lagrange Constellation (Sun, Earth, Moon & L2, L3, L4, L5, L2M)
+    paths.extend(path_lagrange_constellation(cx, cy, r_inner * 0.72, azimuth_deg, lunar_pos))
 
     # Azimuth Pointer (Hand from center to current dh36 azimuth)
     azim_rad = math.radians(azimuth_deg - 90.0)
@@ -786,12 +887,13 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
     t1_mid = t1_top + t1_h / 2.0
     paths.append(path_rect(6.0, t1_top, width_mm - 12.0, t1_h))
     paths.extend(render_text_strokes("[STOPA 1: SÍŤ 50 HZ FREKVENCE & MIKRO-DEVIACE]", 9.0, t1_top + 3.0, char_w=1.4, char_h=2.0))
+    paths.extend(render_text_strokes("OSA X: 1 DH = 40 MIN", width_mm - 44.0, t1_top + 3.0, char_w=0.9, char_h=1.4))
 
     # Grid baseline (50.000 Hz)
     paths.append(path_line(24.0, t1_mid, width_mm - 8.0, t1_mid))
     # Threshold dashed guidelines (+20, +50, -20, -50 mHz)
     for mhz, label in [(+50, "+50"), (+20, "+20"), (-20, "-20"), (-50, "-50")]:
-        y_pos = t1_mid - (mhz / 50.0) * (t1_h * 0.38)
+        y_pos = t1_mid - (mhz / 50.0) * (t1_h * 0.33)
         # dashed line
         x_cur = 24.0
         while x_cur < width_mm - 8.0:
@@ -805,7 +907,8 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
     cur_drift = telemetry["grid"]["drift_mhz"]
     trace_pts = []
     num_pts = 64
-    x_step = (width_mm - 34.0) / float(num_pts)
+    x_timeline_w = width_mm - 34.0
+    x_step = x_timeline_w / float(num_pts)
     # Synthetic / inertia Markov walk seeded around actual drift
     drift_val = cur_drift
     for i in range(num_pts + 1):
@@ -815,11 +918,33 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
         drift_point = drift_val + delta
         # Clamp to +- 50 mHz range
         clamped = max(-55.0, min(55.0, drift_point))
-        yp = t1_mid - (clamped / 50.0) * (t1_h * 0.38)
+        yp = t1_mid - (clamped / 50.0) * (t1_h * 0.33)
         trace_pts.append((xp, yp))
 
     d_trace = f"M {trace_pts[0][0]:.2f},{trace_pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in trace_pts[1:])
     paths.append(d_trace)
+
+    # Track 1: Time on X-Axis (1 DH = 40 min = 2400 s)
+    t1_ax_y = t1_top + t1_h - 4.2
+    paths.append(path_line(24.0, t1_ax_y, width_mm - 8.0, t1_ax_y))
+    cur_ts = telemetry["time"].get("timestamp", time.time())
+    for i in range(9):
+        tx = 25.0 + (i / 8.0) * x_timeline_w
+        is_major = (i % 2 == 0)
+        tick_len = 1.8 if is_major else 0.9
+        paths.append(path_line(tx, t1_ax_y, tx, t1_ax_y - tick_len))
+        if is_major:
+            dt_sec = (8 - i) * 300  # 40m, 30m, 20m, 10m, 0m
+            t_dt = datetime.fromtimestamp(cur_ts - dt_sec)
+            t_clock = t_dt.strftime("%H:%M")
+            if i == 0:
+                paths.extend(render_text_strokes(f"{t_clock} (-40M)", tx, t1_ax_y + 1.2, char_w=0.9, char_h=1.4, align="left"))
+            elif i == 4:
+                paths.extend(render_text_strokes(f"{t_clock} (-20M)", tx, t1_ax_y + 1.2, char_w=0.9, char_h=1.4, align="center"))
+            elif i == 8:
+                paths.extend(render_text_strokes(f"{t_clock} [NYNÍ]", tx, t1_ax_y + 1.2, char_w=0.9, char_h=1.4, align="right"))
+            else:
+                paths.extend(render_text_strokes(f"-{dt_sec // 60}M", tx, t1_ax_y + 1.2, char_w=0.8, char_h=1.3, align="center"))
 
     # 3. Track 2: Weather Seismograph (Y: 96 to 140 mm)
     t2_top = 96.0
@@ -827,15 +952,16 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
     t2_mid = t2_top + t2_h / 2.0
     paths.append(path_rect(6.0, t2_top, width_mm - 12.0, t2_h))
     paths.extend(render_text_strokes("[STOPA 2: METEO PRAHA - TEPLOTA & TLAK VZDUCHU]", 9.0, t2_top + 3.0, char_w=1.4, char_h=2.0))
+    paths.extend(render_text_strokes("OSA X: HISTORIE 24 HODIN", width_mm - 48.0, t2_top + 3.0, char_w=0.9, char_h=1.4))
 
     # Axes
     paths.extend(render_text_strokes("20°C", 9.0, t2_top + 8.0, char_w=1.1, char_h=1.6))
     paths.extend(render_text_strokes("10°C", 9.0, t2_mid - 0.8, char_w=1.1, char_h=1.6))
-    paths.extend(render_text_strokes(" 0°C", 9.0, t2_top + t2_h - 4.0, char_w=1.1, char_h=1.6))
+    paths.extend(render_text_strokes(" 0°C", 9.0, t2_top + t2_h - 7.5, char_w=1.1, char_h=1.6))
 
     paths.extend(render_text_strokes("1010hPa", width_mm - 26.0, t2_top + 8.0, char_w=1.0, char_h=1.5))
     paths.extend(render_text_strokes(" 980hPa", width_mm - 26.0, t2_mid - 0.8, char_w=1.0, char_h=1.5))
-    paths.extend(render_text_strokes(" 950hPa", width_mm - 26.0, t2_top + t2_h - 4.0, char_w=1.0, char_h=1.5))
+    paths.extend(render_text_strokes(" 950hPa", width_mm - 26.0, t2_top + t2_h - 7.5, char_w=1.0, char_h=1.5))
 
     # Temperature Curve (Solid)
     temp_base = telemetry["weather"]["temp_c"]
@@ -844,7 +970,7 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
         xp = 25.0 + i * x_step
         t_var = temp_base + math.sin(i * 0.22) * 2.5
         norm_t = (t_var - 0.0) / 20.0  # 0..20 deg
-        yp = (t2_top + t2_h - 6.0) - norm_t * (t2_h - 14.0)
+        yp = (t2_top + t2_h - 8.5) - norm_t * (t2_h - 17.0)
         temp_pts.append((xp, yp))
     paths.append(f"M {temp_pts[0][0]:.2f},{temp_pts[0][1]:.2f} " + " ".join(f"L {p[0]:.2f},{p[1]:.2f}" for p in temp_pts[1:]))
 
@@ -855,10 +981,31 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
         xp = 25.0 + i * x_step
         p_var = press_base + math.cos(i * 0.15) * 5.0
         norm_p = (p_var - 950.0) / 60.0  # 950..1010 hPa
-        yp = (t2_top + t2_h - 6.0) - norm_p * (t2_h - 14.0)
+        yp = (t2_top + t2_h - 8.5) - norm_p * (t2_h - 17.0)
         press_pts.append((xp, yp))
     for i in range(0, len(press_pts) - 1, 2):
         paths.append(path_line(press_pts[i][0], press_pts[i][1], press_pts[i+1][0], press_pts[i+1][1]))
+
+    # Track 2: Time on X-Axis (24-hour Diurnal History)
+    t2_ax_y = t2_top + t2_h - 4.2
+    paths.append(path_line(24.0, t2_ax_y, width_mm - 8.0, t2_ax_y))
+    for i in range(9):
+        tx = 25.0 + (i / 8.0) * x_timeline_w
+        is_major = (i % 2 == 0)
+        tick_len = 1.8 if is_major else 0.9
+        paths.append(path_line(tx, t2_ax_y, tx, t2_ax_y - tick_len))
+        if is_major:
+            dh_hours = (8 - i) * 3  # 24h, 18h, 12h, 6h, 0h
+            t_dt = datetime.fromtimestamp(cur_ts - dh_hours * 3600)
+            t_clock = t_dt.strftime("%H:%M")
+            if i == 0:
+                paths.extend(render_text_strokes(f"{t_clock} (-24H)", tx, t2_ax_y + 1.2, char_w=0.9, char_h=1.4, align="left"))
+            elif i == 4:
+                paths.extend(render_text_strokes(f"{t_clock} (-12H)", tx, t2_ax_y + 1.2, char_w=0.9, char_h=1.4, align="center"))
+            elif i == 8:
+                paths.extend(render_text_strokes(f"{t_clock} [NYNÍ]", tx, t2_ax_y + 1.2, char_w=0.9, char_h=1.4, align="right"))
+            else:
+                paths.extend(render_text_strokes(f"-{dh_hours}H", tx, t2_ax_y + 1.2, char_w=0.8, char_h=1.3, align="center"))
 
     # 4. Track 3: Wireless M-Bus Radiator Heat Pulses (Y: 144 to 194 mm)
     t3_top = 144.0
@@ -866,6 +1013,7 @@ def generate_strip_svg(telemetry, width_mm=140.0, height_mm=210.0):
     t3_base_y = t3_top + t3_h - 8.0
     paths.append(path_rect(6.0, t3_top, width_mm - 12.0, t3_h))
     paths.extend(render_text_strokes(f"[STOPA 3: OTOP - 19 MĚŘIDEL WIRELESS M-BUS (CELKEM {telemetry['heat']['total_units']:.0f} HCA)]", 9.0, t3_top + 3.0, char_w=1.4, char_h=2.0))
+    paths.extend(render_text_strokes("OSA X: 19 MĚŘIDEL V SÍTI", width_mm - 48.0, t3_top + 3.0, char_w=0.9, char_h=1.4))
 
     # Baseline for meters
     paths.append(path_line(12.0, t3_base_y, width_mm - 12.0, t3_base_y))
