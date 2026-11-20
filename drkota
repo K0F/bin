@@ -154,6 +154,40 @@ def cmd_plot(args):
     subprocess.run(cmd)
 
 
+def cmd_clock(args):
+    action = (args.action or "status").lower()
+    target_host = "bazina" if os.uname().nodename != "bazina" else None
+    
+    if action == "status":
+        cmd = ["python3", "/home/kof/src/lagrange/lagrange_stream.py", "--status"]
+        if target_host:
+            subprocess.run(["ssh", target_host] + cmd)
+        else:
+            subprocess.run(cmd)
+    elif action in ["start", "stop", "restart"]:
+        cmd = ["systemctl", "--user", action, "drkota-clock.service"]
+        if target_host:
+            subprocess.run(["ssh", target_host] + cmd)
+        else:
+            subprocess.run(cmd)
+        print(f"[drkota-clock] Service {action}ed on bazina.")
+    elif action == "speed":
+        val = float(args.val)
+        cfg_cmd = f"python3 -c 'import json, os; p=\"/dev/shm/drkota_clock_config.json\"; d=json.load(open(p)) if os.path.exists(p) else {{}}; d[\"period_sec\"]={val}; json.dump(d, open(p, \"w\")); print(\"Period set to {val}s\")'"
+        if target_host:
+            subprocess.run(["ssh", target_host, cfg_cmd])
+        else:
+            os.system(cfg_cmd)
+    elif action == "zero":
+        cmd = ["python3", "/home/kof/src/lagrange/lagrange_stream.py", "--zero"]
+        if target_host:
+            subprocess.run(["ssh", target_host] + cmd)
+        else:
+            subprocess.run(cmd)
+    else:
+        print("Usage: drkota clock [status|start|stop|restart|speed <sec>|zero]")
+
+
 def cmd_stop(args):
     subprocess.run(["pkill", "-INT", "-f", "gomotor"], check=False)
     time.sleep(0.3)
@@ -222,6 +256,12 @@ def main():
     p_text = subparsers.add_parser("text", help="Render text to SVG and plot it")
     p_text.add_argument("words", nargs="+", help="Text string to plot")
     p_text.set_defaults(func=cmd_text)
+
+    # clock
+    p_clock = subparsers.add_parser("clock", help="Control real-time Lagrange Spirograph clock service [status|start|stop|restart|speed <sec>|zero]")
+    p_clock.add_argument("action", nargs="?", default="status", help="status, start, stop, restart, speed, zero")
+    p_clock.add_argument("val", nargs="?", default=None, help="Value for speed (period in seconds)")
+    p_clock.set_defaults(func=cmd_clock)
 
     # stop / estop
     p_stop = subparsers.add_parser("stop", aliases=["estop"], help="Emergency stop active plot, lift pen, and zero (0, 0)")
