@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""
+scan-to-data: Fast, robust CLI scanner utility for the KOF fleet.
+Scans from Brother DCP-J4120DW via SANE / AirScan / WSD / Network SANE.
+Saves to /mnt/data/scans/ with automatic timestamping, optional Tesseract OCR,
+and searchable PDF generation.
+"""
+
+import sys
+import os
+import argparse
+import subprocess
+import shutil
+import tempfile
+from datetime import datetime
+
+DEFAULT_DEST_DIR = "/mnt/data/scans"
+FALLBACK_DEST_DIR = os.path.expanduser("~/scans")
+
+# Candidate SANE device URIs in order of preference
+DEVICE_CANDIDATES = [
+    "airscan:w0:Brother DCP-J4120DW",
+    "brother4:net1;dev0",
+    "net:192.168.1.104:brother4:net1;dev0",
+    "net:192.168.1.104:airscan:w0:Brother DCP-J4120DW",
+]
+
+def find_working_device(preferred=None):
+    if preferred:
+        return preferred
+
+    # Test candidate devices with scanimage -n
+    for dev in DEVICE_CANDIDATES:
+        try:
+            res = subprocess.run(
+                ["scanimage", "-d", dev, "-n"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=4
+            )
+            if res.returncode == 0:
+                return dev
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+
+    # Fallback: query scanimage -L
+    try:
+        res = subprocess.run(["scanimage", "-L"], capture_output=True, text=True, timeout=8)
+        for line in res.stdout.splitlines():
+            if "Brother" in line or "DCP" in line:
+                start = line.find("`")
+                end = line.find("'", start + 1)
+                if start != -1 and end != -1:
+                    return line[start + 1:end]
+    except Exception:
+        pass
+
+    return "airscan:w0:Brother DCP-J4120DW"
+
+def map_mode_for_device(device, requested_mode):
+    """Translate standard Color/Gray/Lineart into backend-specific option values."""
+    requested = requested_mode.lower()
+    if "brother4" in device:
+        if requested in ("color", "rgb", "colour"):
+            return "24bit Color[Fast]"
+        elif requested in ("gray", "grey"):
+            return "True Gray"
+        elif requested in ("lineart", "bw", "black"):
+            return "Black & White"
+        return "24bit Color[Fast]"
+    else:  # airscan or generic SANE
+        if requested in ("color", "rgb", "colour"):
+            return "Color"
+        elif requested in ("gray", "grey"):
+            return "Gray"
+        elif requested in ("lineart", "bw", "black"):
+            return "Gray"
+        return "Color"
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Scan from Brother DCP-J4120DW directly to unified fleet storage (/mnt/data/scans)"
+    )
+    parser.add_argument(
+        "-m", "--mode",
+        choices=["Color", "Gray", "Lineart"],
+        default="Color",
+        help="Scan mode (default: Color)"
+    )
+    parser.add_argument(
+        "-r", "--resolution",
+        type=int,
+        choices=[100, 150, 200, 300, 600],
+        default=300,
+        help="Scan resolution in DPI (default: 300)"
+    )
+    parser.add_argument(
+        "-f", "--format",
+        choices=["pdf", "png", "jpg"],
+        default="pdf",
+        help="Output file format (default: pdf)"
+    )
+    parser.add_argument(
+        "-o", "--ocr",
+        action="store_true",
+        help="Perform OCR via Tesseract (English + Czech) and embed searchable text"
+    )
+    parser.add_argument(
+        "-d", "--device",
+        default=None,
+        help="Explicit SANE device URI (auto-detected if omitted)"
+    )
+    parser.add_argument(
+        "-n", "--name",
+        default=None,
+        help="Custom output filename prefix"
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=f"Target directory (default: {DEFAULT_DEST_DIR})"
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Open scanned file in default viewer when finished"
+    )
+
+    args = parser.parse_args()
+
+    # Determine output directory
+    target_dir = args.output_dir or (DEFAULT_DEST_DIR if os.path.isdir(DEFAULT_DEST_DIR) else FALLBACK_DEST_DIR)
+    os.makedirs(target_dir, exist_ok=True)
+
+    print("==> Detecting fleet scanner...")
+    device = find_working_device(args.device)
+    print(f"==> Active Scanner Device: [{device}]")
+
+    backend_mode = map_mode_for_device(device, args.mode)
+
+    now = datetime.now()
+    timestamp = now.strftime("%Y-%m-%d_%H%M%S")
+    prefix = f"{args.name}_" if args.name else ""
+    base_name = f"{prefix}{timestamp}_{args.mode.lower()}_{args.resolution}dpi"
+    final_output = os.path.join(target_dir, f"{base_name}.{args.format}")
+
+    # Use a secure temporary directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_pnm = os.path.join(temp_dir, "scan.pnm")
+        temp_png = os.path.join(temp_dir, "scan.png")
+
+        print(f"==> Scanning from flatbed at {args.resolution} DPI ({args.mode} -> {backend_mode})...")
+        cmd_scan = [
+            "scanimage",
+            "-d", device,
+            "--format=pnm",
+            f"--mode={backend_mode}",
+            f"--resolution={args.resolution}",
+        ]
+
+        with open(temp_pnm, "wb") as f_out:
+            res_scan = subprocess.run(cmd_scan, stdout=f_out, stderr=subprocess.PIPE)
+
+        if res_scan.returncode != 0:
+            err_msg = res_scan.stderr.decode("utf-8", errors="replace")
+            print(f"Error during scanning: {err_msg}", file=sys.stderr)
+            sys.exit(res_scan.returncode)
+
+        if not os.path.exists(temp_pnm) or os.path.getsize(temp_pnm) == 0:
+            print("Error: Scan resulted in an empty file.", file=sys.stderr)
+            sys.exit(1)
+
+        print("==> Converting raw scan data...")
+        conv_tool = "magick" if shutil.which("magick") else "convert"
+        cmd_conv = [conv_tool, temp_pnm, "-quality", "95", temp_png]
+        subprocess.run(cmd_conv, check=True)
+
+        if args.format == "png":
+            shutil.copyfile(temp_png, final_output)
+        elif args.format == "jpg":
+            cmd_jpg = [conv_tool, temp_png, "-quality", "92", final_output]
+            subprocess.run(cmd_jpg, check=True)
+        elif args.format == "pdf":
+            if args.ocr and shutil.which("tesseract"):
+                print("==> Running OCR (English + Czech) with Tesseract to create searchable PDF...")
+                ocr_base = os.path.join(temp_dir, "ocr_output")
+                cmd_ocr = [
+                    "tesseract",
+                    temp_png,
+                    ocr_base,
+                    "-l", "eng+ces",
+                    "pdf", "txt"
+                ]
+                subprocess.run(cmd_ocr, check=True, stderr=subprocess.DEVNULL)
+                shutil.copyfile(f"{ocr_base}.pdf", final_output)
+                txt_output = os.path.join(target_dir, f"{base_name}.txt")
+                shutil.copyfile(f"{ocr_base}.txt", txt_output)
+                print(f"==> Extracted text saved to: {txt_output}")
+            else:
+                if shutil.which("img2pdf"):
+                    with open(final_output, "wb") as f_pdf:
+                        subprocess.run(["img2pdf", temp_png], stdout=f_pdf, check=True)
+                else:
+                    subprocess.run([conv_tool, temp_png, final_output], check=True)
+
+    size_mb = os.path.getsize(final_output) / (1024.0 * 1024.0)
+    print(f"==> Successfully saved scan:")
+    print(f"    Path: {final_output}")
+    print(f"    Size: {size_mb:.2f} MB")
+
+    # Log to dnes journal
+    try:
+        subprocess.run(
+            ["dnes", "done", f"Scanned 300 DPI Color document to {os.path.basename(final_output)} via Brother DCP-J4120DW"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+
+    if args.open and shutil.which("xdg-open"):
+        subprocess.Popen(["xdg-open", final_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+if __name__ == "__main__":
+    main()
