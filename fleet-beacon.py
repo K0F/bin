@@ -154,6 +154,18 @@ def main():
         elif bat_pct >= 0 and bat_pct <= 15:
             alert = f"{hostname} BATTERY CRITICAL: {bat_pct}%"
 
+        # Read local agent context if available
+        context_data = None
+        shm_context = "/dev/shm/fleet_context.json"
+        if os.path.exists(shm_context):
+            try:
+                with open(shm_context, "r") as cf:
+                    c_store = json.load(cf)
+                    if hostname in c_store:
+                        context_data = c_store[hostname]
+            except Exception:
+                pass
+
         payload = {
             "name": hostname,
             "hostname": hostname,
@@ -170,7 +182,8 @@ def main():
             "gpu_str": gpu_str,
             "temp_c": temp_c,
             "battery_percent": bat_pct,
-            "alert": alert
+            "alert": alert,
+            "context": context_data
         }
 
         msg = json.dumps(payload).encode("utf-8")

@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""
+qwen-distill-gemini — Distill Gemini Trajectories & Zsh History into Qwen Dataset & Few-Shot Context
+Part of Observatoř Telemetry Platform // Fleet Operations
+
+Extracts completed tasks, tool calls, shell commands, and syntheses from:
+1. Antigravity transcripts (~/.gemini/antigravity-cli/brain/*/transcript.jsonl)
+2. Zsh extended history (~/.zsh_history)
+3. Fleet milestones (~/src/dnes/journal.md)
+
+Outputs:
+1. ShareGPT / ChatML JSONL dataset: /mnt/data/datasets/gemini_qwen_trajectories.jsonl
+   (with fallback to ~/src/observator/gemini_qwen_trajectories.jsonl)
+2. Active few-shot prompt for local Qwen: /dev/shm/qwen_fewshot_gemini.txt
+   (and persisted to ~/.agents/qwen_fewshot_gemini.txt)
+"""
+
+import os
+import sys
+import glob
+import json
+import time
+import argparse
+from collections import deque
+
+DEFAULT_OUT_DIR = "/mnt/data/datasets"
+FALLBACK_OUT_DIR = os.path.expanduser("~/src/observator")
+SHM_FEWSHOT = "/dev/shm/qwen_fewshot_gemini.txt"
+PERSIST_FEWSHOT = os.path.expanduser("~/.agents/qwen_fewshot_gemini.txt")
+BRAIN_DIR = os.path.expanduser("~/.gemini/antigravity-cli/brain")
+
+def resolve_dataset_path():
+    try:
+        if os.path.isdir("/mnt/data"):
+            os.makedirs(DEFAULT_OUT_DIR, exist_ok=True)
+            if os.access(DEFAULT_OUT_DIR, os.W_OK):
+                return os.path.join(DEFAULT_OUT_DIR, "gemini_qwen_trajectories.jsonl")
+    except Exception:
+        pass
+    os.makedirs(FALLBACK_OUT_DIR, exist_ok=True)
+    return os.path.join(FALLBACK_OUT_DIR, "gemini_qwen_trajectories.jsonl")
+
+def tail_file_lines(filepath, max_bytes=512*1024, max_lines=200):
+    """Efficiently read the last lines of a potentially huge file."""
+    try:
+        size = os.path.getsize(filepath)
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                # Discard the partial first line
+                f.readline()
+            lines = f.readlines()
+            return lines[-max_lines:]
+    except Exception:
+        return []
+
+def parse_transcripts(limit_convs=3):
+    """Parse recent Antigravity transcripts (tail only) and extract (query, commands, response) pairs."""
+    try:
+        conv_dirs = glob.glob(os.path.join(BRAIN_DIR, "*"))
+        conv_dirs = [d for d in conv_dirs if os.path.isdir(d)]
+        conv_dirs.sort(key=lambda d: os.path.getmtime(d), reverse=True)
+    except Exception:
+        return []
+
+    extracted_samples = []
+
+    for cdir in conv_dirs[:limit_convs]:
+        t_path = os.path.join(cdir, ".system_generated", "logs", "transcript.jsonl")
+        if not os.path.exists(t_path):
+            continue
+
+        cid = os.path.basename(cdir)
+        lines = tail_file_lines(t_path, max_bytes=512*1024, max_lines=150)
+
+        current_query = None
+        tool_actions = []
+        assistant_content = ""
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                step = json.loads(line)
+            except Exception:
+                continue
+
+            stype = step.get("type")
+
+            if stype == "USER_INPUT":
+                if current_query and (tool_actions or assistant_content):
+                    extracted_samples.append({
+                        "conversation_id": cid,
+                        "timestamp": step.get("created_at", ""),
+                        "instruction": current_query.strip(),
+                        "commands": list(tool_actions),
+                        "synthesis": assistant_content.strip()
+                    })
+                current_query = step.get("content", "")
+                tool_actions = []
+                assistant_content = ""
+
+            elif stype == "PLANNER_RESPONSE":
+                tcalls = step.get("tool_calls", [])
+                if isinstance(tcalls, list):
+                    for tc in tcalls:
+                        name = tc.get("name")
+                        args = tc.get("arguments", {})
+                        if name == "run_command":
+                            cmd = args.get("CommandLine", "")
+                            if cmd and cmd not in tool_actions:
+                                tool_actions.append(cmd)
+                content = step.get("content", "")
+                if content:
+                    assistant_content += "\n" + content
+
+        if current_query and (tool_actions or assistant_content):
+            extracted_samples.append({
+                "conversation_id": cid,
+                "timestamp": "",
+                "instruction": current_query.strip(),
+                "commands": list(tool_actions),
+                "synthesis": assistant_content.strip()
+            })
+
+    return extracted_samples
+
+def parse_zsh_history(limit_lines=100):
+    """Extract recent verified commands from ~/.zsh_history."""
+    hist_path = os.path.expanduser("~/.zsh_history")
+    if not os.path.exists(hist_path):
+        return []
+
+    commands = []
+    lines = tail_file_lines(hist_path, max_bytes=64*1024, max_lines=limit_lines)
+    for l in lines:
+        l = l.strip()
+        if l.startswith(": ") and ";" in l:
+            cmd = l.split(";", 1)[1].strip()
+            if cmd and len(cmd) > 3 and not cmd.startswith("ls") and not cmd.startswith("cd") and not cmd.startswith("cat"):
+                commands.append(cmd)
+    return list(dict.fromkeys(commands))
+
+def build_fewshot_prompt(samples, commands):
+    """Construct an active few-shot prompt for Qwen models."""
+    lines = [
+        "# Techné Fleet Command & Workflow Few-Shot Patterns",
+        "# Generated automatically from Gemini execution trajectories",
+        f"# Updated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "## Verified Fleet Single-Line Commands & Patterns:"
+    ]
+    for c in commands[-20:]:
+        lines.append(f"$ {c}")
+
+    lines.append("\n## Exemplary Task Solutions:")
+    valid_samples = [s for s in samples if s.get("commands") and s.get("instruction")][-4:]
+    for i, s in enumerate(valid_samples, 1):
+        lines.append(f"\n### Příklad {i}:")
+        lines.append(f"Zadání: {s['instruction'][:140]}")
+        lines.append("Provedené příkazy:")
+        for cmd in s['commands'][:3]:
+            lines.append(f"  {cmd}")
+        synth = s['synthesis'].split('\n')[0] if s.get('synthesis') else ""
+        if synth:
+            lines.append(f"Závěr: {synth[:140]}")
+
+    return "\n".join(lines) + "\n"
+
+def main():
+    parser = argparse.ArgumentParser(description="Distill Gemini trajectories into Qwen dataset & few-shot prompt")
+    parser.add_argument("--limit-convs", type=int, default=3, help="Number of recent conversations to scan")
+    parser.add_argument("--fewshot-only", action="store_true", help="Only update few-shot prompt")
+    args = parser.parse_args()
+
+    print("[qwen-distill-gemini] Harvesting recent trajectories and Zsh history...")
+    samples = parse_transcripts(limit_convs=args.limit_convs)
+    commands = parse_zsh_history(limit_lines=100)
+
+    fewshot_text = build_fewshot_prompt(samples, commands)
+    for p in (SHM_FEWSHOT, PERSIST_FEWSHOT):
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(fewshot_text)
+            try:
+                os.chmod(p, 0o666)
+            except Exception:
+                pass
+            print(f"[qwen-distill-gemini] Wrote few-shot context to: {p}")
+        except Exception as e:
+            print(f"Warning: could not write to {p}: {e}", file=sys.stderr)
+
+    if args.fewshot_only:
+        return
+
+    dataset_file = resolve_dataset_path()
+    count_written = 0
+    try:
+        with open(dataset_file, "a", encoding="utf-8") as out_f:
+            for s in samples:
+                if not s.get("instruction") or not s.get("commands"):
+                    continue
+                record = {
+                    "system": "Jsi Techné, offline technická a výzkumná partnerka pro správu flotily, Linuxu, plotru Drkota a SuperCollideru.",
+                    "user": s["instruction"][:500],
+                    "commands": s["commands"][:10],
+                    "assistant": s["synthesis"][:500] if s.get("synthesis") else "\n".join(s["commands"][:5]),
+                    "metadata": {
+                        "conversation_id": s.get("conversation_id"),
+                        "timestamp": s.get("timestamp"),
+                        "fleet_node": "t520"
+                    }
+                }
+                out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                count_written += 1
+        print(f"[qwen-distill-gemini] Appended {count_written} trajectory samples to {dataset_file}")
+    except Exception as e:
+        print(f"Error appending to dataset {dataset_file}: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()

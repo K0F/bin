@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""
+fleet-context — Real-time Context & Knowledge Relay across Fleet Nodes & Agents
+Part of Observatoř Telemetry Platform // Fleet Operations
+
+Allows Antigravity, Gemini, Qwen, and MCP servers to share active session context,
+recent discoveries, task state, and telemetry with zero runtime latency (< 1ms).
+Uses /dev/shm/fleet_context.json, persists to ~/src/.agents/context.json, and
+broadcasts immediate UDP packets on port 9850 to all fleet nodes.
+"""
+
+import os
+import sys
+import time
+import json
+import socket
+import argparse
+
+PORT = 9850
+TARGETS = [
+    "<broadcast>",
+    "255.255.255.255",
+    "192.168.1.255",
+    "192.168.1.100",  # t520 ETH
+    "192.168.1.102",  # t520 WiFi
+    "192.168.1.104",  # bazina
+    "192.168.1.101",  # boxC
+    "192.168.1.105",  # crostini
+    "192.168.1.103",  # android
+    "10.39.9.255",    # WireGuard
+    "10.39.9.1",      # boxC VPN
+    "10.0.0.255",
+    "10.0.0.18",
+    "10.0.0.14",
+    "91.139.118.43",
+    "127.0.0.1"
+]
+
+SHM_PATH = "/dev/shm/fleet_context.json"
+PERSIST_PATH = os.path.expanduser("~/src/.agents/context.json")
+
+def get_node():
+    if os.path.exists("/data/data/com.termux") or "TERMUX_VERSION" in os.environ:
+        return "phone"
+    h = socket.gethostname().split('.')[0]
+    if h in ("localhost", "android"):
+        return "phone"
+    return h
+
+def load_context():
+    data = {}
+    if os.path.exists(SHM_PATH):
+        try:
+            with open(SHM_PATH, "r") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    if not data and os.path.exists(PERSIST_PATH):
+        try:
+            with open(PERSIST_PATH, "r") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    return data
+
+def save_context(data):
+    # 1. Update /dev/shm
+    tmp_shm = f"{SHM_PATH}.tmp.{os.getpid()}"
+    try:
+        with open(tmp_shm, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        try:
+            os.chmod(tmp_shm, 0o666)
+        except Exception:
+            pass
+        os.replace(tmp_shm, SHM_PATH)
+    except Exception as e:
+        print(f"Warning: could not write to {SHM_PATH}: {e}", file=sys.stderr)
+
+    # 2. Persist to ~/src/.agents/context.json
+    try:
+        os.makedirs(os.path.dirname(PERSIST_PATH), exist_ok=True)
+        tmp_persist = f"{PERSIST_PATH}.tmp.{os.getpid()}"
+        with open(tmp_persist, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_persist, PERSIST_PATH)
+    except Exception:
+        pass
+
+def broadcast_update(payload):
+    msg = json.dumps(payload).encode("utf-8")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    for target in TARGETS:
+        try:
+            sock.sendto(msg, (target, PORT))
+        except Exception:
+            pass
+    sock.close()
+
+def cmd_set(args):
+    node = args.node or get_node()
+    topic = args.topic
+    author = args.author or f"{node}:techne"
+
+    try:
+        data_val = json.loads(args.data)
+    except Exception:
+        data_val = args.data
+
+    store = load_context()
+    if node not in store:
+        store[node] = {}
+
+    entry = {
+        "timestamp": time.time(),
+        "author": author,
+        "value": data_val
+    }
+    store[node][topic] = entry
+    store["_last_updated"] = time.time()
+    store["_last_node"] = node
+    store["_last_topic"] = topic
+
+    save_context(store)
+
+    # Broadcast UDP
+    udp_packet = {
+        "type": "FLEET_CONTEXT_UPDATE",
+        "node": node,
+        "author": author,
+        "topic": topic,
+        "entry": entry
+    }
+    broadcast_update(udp_packet)
+
+    if not args.quiet:
+        print(f"[fleet-context] Updated topic '{topic}' on node '{node}' by {author}")
+
+def cmd_get(args):
+    store = load_context()
+    node = args.node
+    topic = args.topic
+
+    if node:
+        node_data = store.get(node, {})
+        if topic:
+            val = node_data.get(topic, {}).get("value")
+            if val is not None:
+                if isinstance(val, (dict, list)):
+                    print(json.dumps(val, indent=2, ensure_ascii=False))
+                else:
+                    print(val)
+            else:
+                sys.exit(1)
+        else:
+            print(json.dumps(node_data, indent=2, ensure_ascii=False))
+    elif topic:
+        # Search all nodes for this topic
+        results = {}
+        for n, topics in store.items():
+            if isinstance(topics, dict) and topic in topics:
+                results[n] = topics[topic]
+        if results:
+            print(json.dumps(results, indent=2, ensure_ascii=False))
+        else:
+            sys.exit(1)
+    else:
+        print(json.dumps(store, indent=2, ensure_ascii=False))
+
+def cmd_show(args):
+    store = load_context()
+    if not store:
+        print("[fleet-context] No active context recorded.")
+        return
+
+    print("=" * 68)
+    print("  FLEET AGENT CONTEXT & SHARED KNOWLEDGE")
+    print("=" * 68)
+    for node, topics in store.items():
+        if node.startswith("_"):
+            continue
+        print(f"\n[NODE: {node}]")
+        if isinstance(topics, dict):
+            for t_name, t_val in topics.items():
+                ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t_val.get("timestamp", 0)))
+                auth = t_val.get("author", "unknown")
+                val = t_val.get("value")
+                if isinstance(val, dict):
+                    val_summary = json.dumps(val, ensure_ascii=False)
+                    if len(val_summary) > 60:
+                        val_summary = val_summary[:57] + "..."
+                else:
+                    val_summary = str(val)
+                print(f"  * {t_name:<18} ({ts_str} by {auth}): {val_summary}")
+    print("\n" + "=" * 68)
+
+def main():
+    parser = argparse.ArgumentParser(description="Fleet Agent Context & Shared Knowledge Relay")
+    subparsers = parser.add_subparsers(dest="cmd")
+
+    p_set = subparsers.add_parser("set", help="Set context topic on a node")
+    p_set.add_argument("--topic", "-t", required=True, help="Topic name (e.g. goal, milestone, active_files, mcp)")
+    p_set.add_argument("--data", "-d", required=True, help="Data payload (JSON or text)")
+    p_set.add_argument("--node", "-n", help="Node name (default: current host)")
+    p_set.add_argument("--author", "-a", help="Author tag (default: <node>:techne)")
+    p_set.add_argument("--quiet", "-q", action="store_true", help="Quiet mode")
+
+    p_get = subparsers.add_parser("get", help="Get context topic")
+    p_get.add_argument("--topic", "-t", help="Topic name to retrieve")
+    p_get.add_argument("--node", "-n", help="Node name to filter")
+
+    p_show = subparsers.add_parser("show", help="Show all active fleet context")
+
+    args = parser.parse_args()
+    if args.cmd == "set":
+        cmd_set(args)
+    elif args.cmd == "get":
+        cmd_get(args)
+    elif args.cmd in ("show", "status") or not args.cmd:
+        cmd_show(args)
+
+if __name__ == "__main__":
+    main()
