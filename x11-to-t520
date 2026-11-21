@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ~/bin/x11-to-t520 — Redirect X11 GUI windows from current node (bazina) to t520
+# =============================================================================
+# Usage:
+#   x11-to-t520              # Enable redirection, start tunnel, sync xauth
+#   x11-to-t520 on           # Same as above
+#   x11-to-t520 off|self     # Disable redirection, switch back to local :0
+#   x11-to-t520 status       # Inspect current redirection and connection state
+#   x11-to-t520 service      # Enable/start persistent systemd user service
+#   x11-to-t520 <cmd> [args] # Run a specific command on t520 display
+#   source x11-to-t520       # Export DISPLAY=:10 in the calling shell
+# =============================================================================
+set -e
+
+LOCAL_DISP=":10"
+SOCKET_PATH="/tmp/.X11-unix/X10"
+TARGET_FILE="${HOME}/.config/x11-target"
+mkdir -p "${HOME}/.config"
+
+# Detect best SSH host for t520 (Ethernet low-latency > Wi-Fi > Wireguard)
+detect_host() {
+    if ping -c 1 -W 1 192.168.1.103 >/dev/null 2>&1; then
+        echo "t520"
+    elif ping -c 1 -W 1 192.168.1.105 >/dev/null 2>&1; then
+        echo "t520"
+    elif ping -c 1 -W 1 10.39.10.3 >/dev/null 2>&1; then
+        echo "t520-wg"
+    else
+        echo "t520"
+    fi
+}
+
+sync_cookie() {
+    local host="$1"
+    local cookie
+    cookie=$(ssh -o BatchMode=yes -o ConnectTimeout=3 "$host" "xauth list :0 2>/dev/null" | head -n 1 | awk '{print $NF}')
+    if [ -n "$cookie" ]; then
+        xauth add "$LOCAL_DISP" . "$cookie" >/dev/null 2>&1 || true
+        xauth add "$(uname -n)/unix:10" . "$cookie" >/dev/null 2>&1 || true
+        xauth add "localhost/unix:10" . "$cookie" >/dev/null 2>&1 || true
+        xauth add "localhost:10" . "$cookie" >/dev/null 2>&1 || true
+    fi
+}
+
+is_tunnel_alive() {
+    if [ -S "$SOCKET_PATH" ]; then
+        if DISPLAY="$LOCAL_DISP" timeout 1.2 xprop -root >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+start_tunnel() {
+    local host
+    host=$(detect_host)
+
+    # Sync xauth cookie first
+    sync_cookie "$host"
+
+    if is_tunnel_alive; then
+        return 0
+    fi
+
+    # Clean up stale socket or dead process
+    pkill -f "ssh.*-L /tmp/\.X11-unix/X10:" 2>/dev/null || true
+    rm -f "$SOCKET_PATH"
+
+    # Launch SSH background socket forward
+    ssh -f -N -o ExitOnForwardFailure=yes \
+        -o ServerAliveInterval=15 \
+        -o ServerAliveCountMax=3 \
+        -L "$SOCKET_PATH:/tmp/.X11-unix/X0" \
+        "$host" 2>/dev/null || {
+            echo "[-] Error: Failed to establish X11 tunnel to $host" >&2
+            return 1
+        }
+
+    # Verify connection
+    local retries=15
+    while [ $retries -gt 0 ]; do
+        if is_tunnel_alive; then
+            return 0
+        fi
+        sleep 0.2
+        retries=$((retries - 1))
+    done
+
+    echo "[-] Warning: Tunnel started, but display not responding yet." >&2
+    return 1
+}
+
+stop_tunnel() {
+    pkill -f "ssh.*-L /tmp/\.X11-unix/X10:" 2>/dev/null || true
+    rm -f "$SOCKET_PATH"
+}
+
+set_target_t520() {
+    echo "t520" > "$TARGET_FILE"
+    start_tunnel
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user set-environment DISPLAY="$LOCAL_DISP" 2>/dev/null || true
+        systemctl --user set-environment XAUTHORITY="${HOME}/.Xauthority" 2>/dev/null || true
+    fi
+    export DISPLAY="$LOCAL_DISP"
+}
+
+set_target_self() {
+    echo "self" > "$TARGET_FILE"
+    stop_tunnel
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user set-environment DISPLAY=":0" 2>/dev/null || true
+    fi
+    export DISPLAY=":0"
+}
+
+# Daemon loop for systemd service
+run_daemon() {
+    local host
+    host=$(detect_host)
+    echo "[*] Starting x11-to-t520 tunnel supervisor using $host..."
+    while true; do
+        sync_cookie "$host"
+        rm -f "$SOCKET_PATH"
+        ssh -N -T -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -L "$SOCKET_PATH:/tmp/.X11-unix/X0" \
+            "$host" || true
+        sleep 2
+        host=$(detect_host)
+    done
+}
+
+install_systemd_service() {
+    local unit_dir="${HOME}/.config/systemd/user"
+    local unit_file="${unit_dir}/x11-to-t520.service"
+    mkdir -p "$unit_dir"
+    cat <<UNIT > "$unit_file"
+[Unit]
+Description=X11 Display Redirection Tunnel to t520
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${HOME}/bin/x11-to-t520 tunnel
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:${HOME}/bin
+
+[Install]
+WantedBy=default.target
+UNIT
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now x11-to-t520.service
+    echo "[✓] systemd user service 'x11-to-t520.service' installed and started."
+}
+
+# =============================================================================
+# CLI Dispatcher
+# =============================================================================
+ACTION="${1:-on}"
+
+case "$ACTION" in
+    on|start|enable)
+        set_target_t520
+        echo "=========================================================="
+        echo " 🖥️  X11 Redirection: ALL NEW WINDOWS -> t520 (:10)"
+        echo "=========================================================="
+        echo "  [✓] Target: t520 ($TARGET_FILE)"
+        echo "  [✓] Socket: $SOCKET_PATH -> t520:/tmp/.X11-unix/X0"
+        echo "  [✓] DISPLAY=$LOCAL_DISP"
+        if is_tunnel_alive; then
+            geom=$(DISPLAY="$LOCAL_DISP" xwininfo -root 2>/dev/null | grep -E "geometry|Width|Height" | tr -d ' ' | tr '\n' ' ')
+            echo "  [✓] t520 Screen: $geom"
+        fi
+        echo "=========================================================="
+        ;;
+    off|self|disable)
+        set_target_self
+        echo "=========================================================="
+        echo " 🖥️  X11 Redirection: LOCAL SCREEN (self, :0)"
+        echo "=========================================================="
+        echo "  [✓] Target: self ($TARGET_FILE)"
+        echo "  [✓] Tunnel stopped, DISPLAY=:0"
+        echo "=========================================================="
+        ;;
+    status)
+        current_target="t520"
+        [ -f "$TARGET_FILE" ] && current_target=$(cat "$TARGET_FILE")
+        echo "=========================================================="
+        echo " 🖥️  X11 Redirection Status"
+        echo "=========================================================="
+        echo "  Target:        $current_target"
+        echo "  Local Socket:  $SOCKET_PATH"
+        if is_tunnel_alive; then
+            echo "  Tunnel:        ONLINE (Active & responding)"
+            geom=$(DISPLAY="$LOCAL_DISP" xwininfo -root 2>/dev/null | grep "geometry" | awk '{print $2}')
+            echo "  t520 Display:  $geom"
+        else
+            echo "  Tunnel:        OFFLINE"
+        fi
+        echo "=========================================================="
+        ;;
+    service)
+        install_systemd_service
+        ;;
+    tunnel)
+        run_daemon
+        ;;
+    *)
+        # If arguments are passed as a command, run that command on t520 display
+        set_target_t520 >/dev/null 2>&1
+        exec env DISPLAY="$LOCAL_DISP" XAUTHORITY="${HOME}/.Xauthority" "$@"
+        ;;
+esac

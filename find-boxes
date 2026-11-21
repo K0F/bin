@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ~/bin/find-boxes — Vyhledání Box A a Box B na lokálním subnetu & update ~/.ssh/config
+# =============================================================================
+set -euo pipefail
+
+SSH_CONFIG="${HOME}/.ssh/config"
+BACKUP_CONFIG="${SSH_CONFIG}.bak.$(date +%Y%m%d_%H%M%S)"
+
+echo "=========================================================="
+echo " 🔍 ABC 1938 Box Finder & ~/.ssh/config Updater"
+echo "=========================================================="
+
+# 1. Zjištění aktivního rozhraní a lokálního subnetu
+IFACE=""
+LOCAL_IP=""
+
+# Hledej výchozí rozhraní přes default route
+if command -v ip >/dev/null 2>&1; then
+    DEF_ROUTE=$(ip route show default 2>/dev/null | head -n 1 || true)
+    if [ -n "$DEF_ROUTE" ]; then
+        IFACE=$(echo "$DEF_ROUTE" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
+    fi
+fi
+
+# Fallback: první ne-loopback rozhraní s IPv4
+if [ -z "$IFACE" ]; then
+    IFACE=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1 || true)
+fi
+
+LOCAL_IP=$(ip -4 addr show dev "$IFACE" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1 || true)
+
+if [ -z "$LOCAL_IP" ]; then
+    echo "❌ Chyba: Nelze detekovat aktivní IPv4 adresu na rozhraní $IFACE." >&2
+    exit 1
+fi
+
+SUBNET_PREFIX="${LOCAL_IP%.*}"
+echo "[*] Lokální uzel: $(uname -n) ($LOCAL_IP na rozhraní $IFACE)"
+echo "[*] Skenovaný subnet: ${SUBNET_PREFIX}.0/24"
+
+# 2. Rychlý paralelní scan subnetu (ping + test portu 22)
+TMP_DIR=$(mktemp -d /tmp/find-boxes.XXXXXX)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+echo "[*] Provádím paralelní skenování portu 22 (SSH)..."
+for i in $(seq 1 254); do
+    (
+        target="${SUBNET_PREFIX}.$i"
+        # Rychlý ping (0.5s timeout)
+        if ping -c 1 -W 1 "$target" >/dev/null 2>&1; then
+            # Test portu 22 přes bash /dev/tcp
+            if timeout 0.6 bash -c "</dev/tcp/$target/22" 2>/dev/null; then
+                echo "$target" >> "$TMP_DIR/ssh_hosts.txt"
+            fi
+        fi
+    ) &
+done
+wait
+
+HOSTS_FOUND=()
+if [ -f "$TMP_DIR/ssh_hosts.txt" ]; then
+    mapfile -t HOSTS_FOUND < <(sort -n -t . -k 4 "$TMP_DIR/ssh_hosts.txt")
+fi
+
+echo "[*] Nalezeno ${#HOSTS_FOUND[@]} zařízení s otevřeným portem 22."
+
+# Zkus také známé statické adresy z Divadla ABC (kavárna 192.168.88.x nebo Huawei 192.168.8.x)
+CANDIDATE_IPS=("${HOSTS_FOUND[@]}")
+for static_ip in "${SUBNET_PREFIX}.104" "${SUBNET_PREFIX}.103" "${SUBNET_PREFIX}.106" "192.168.88.104" "192.168.88.103"; do
+    if [[ ! " ${CANDIDATE_IPS[*]} " =~ " ${static_ip} " ]]; then
+        if timeout 0.4 bash -c "</dev/tcp/$static_ip/22" 2>/dev/null; then
+            CANDIDATE_IPS+=("$static_ip")
+        fi
+    fi
+done
+
+# 3. Identifikace Box A a Box B podle služeb a hostname
+BOX_A_IP=""
+BOX_B_IP=""
+
+echo "[*] Identifikuji identity boxů (tracker vs sampler)..."
+for ip in "${CANDIDATE_IPS[@]}"; do
+    # Přeskoč sebe sama
+    if [ "$ip" = "$LOCAL_IP" ]; then
+        continue
+    fi
+
+    # Zkus rychlý SSH dotaz bez blokování
+    INFO=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+               pi@"$ip" "hostname; systemctl is-active tracker sampler 2>/dev/null || true" 2>/dev/null || true)
+
+    if echo "$INFO" | grep -qi "tracker" || echo "$INFO" | grep -qiE "box-?a"; then
+        BOX_A_IP="$ip"
+        echo "  [+] Box A (Tracker) nalezen na IP: $ip"
+    elif echo "$INFO" | grep -qi "sampler" || echo "$INFO" | grep -qiE "box-?b"; then
+        BOX_B_IP="$ip"
+        echo "  [+] Box B (Sampler) nalezen na IP: $ip"
+    else
+        # Heuristika podle konce IP pouze na divadelních podsítích (192.168.88.x nebo 192.168.8.x)
+        if [[ "$ip" == 192.168.88.* || "$ip" == 192.168.8.* ]]; then
+            if [ "${ip##*.}" = "104" ] && [ -z "$BOX_A_IP" ]; then
+                BOX_A_IP="$ip"
+                echo "  [?] Box A (předpoklad dle theater IP .104): $ip"
+            elif { [ "${ip##*.}" = "103" ] || [ "${ip##*.}" = "106" ]; } && [ -z "$BOX_B_IP" ]; then
+                BOX_B_IP="$ip"
+                echo "  [?] Box B (předpoklad dle theater IP .103/.106): $ip"
+            fi
+        fi
+    fi
+done
+
+echo "----------------------------------------------------------"
+echo " Výsledky detekce:"
+echo "   Box A (Tracker / Tras): ${BOX_A_IP:-NEDETEKAVÁN}"
+echo "   Box B (Sampler / Portál): ${BOX_B_IP:-NEDETEKTOVÁN}"
+echo "----------------------------------------------------------"
+
+# 4. Aktualizace ~/.ssh/config
+if [ -n "$BOX_A_IP" ] || [ -n "$BOX_B_IP" ]; then
+    if [ -f "$SSH_CONFIG" ]; then
+        cp "$SSH_CONFIG" "$BACKUP_CONFIG"
+        echo "[*] Vytvořena záloha: $BACKUP_CONFIG"
+
+        python3 - <<EOF
+import re
+
+config_path = "$SSH_CONFIG"
+box_a_ip = "$BOX_A_IP"
+box_b_ip = "$BOX_B_IP"
+
+with open(config_path, "r") as f:
+    content = f.read()
+
+def update_host(content, host_name, new_ip):
+    if not new_ip:
+        return content
+    # Najdi blok Host <host_name> a v něm řádek hostname
+    pattern = rf"(Host\s+{host_name}\b[\s\S]*?hostname\s+)[^\n]+"
+    if re.search(pattern, content, re.IGNORECASE):
+        content = re.sub(pattern, rf"\g<1>{new_ip}", content, count=1, flags=re.IGNORECASE)
+        print(f"  [✓] Host {host_name} -> hostname {new_ip}")
+    else:
+        # Pokud blok neexistuje, přidej ho
+        new_block = f"\nHost {host_name}\n  hostname {new_ip}\n  user pi\n  ServerAliveInterval 30\n  ServerAliveCountMax 3\n"
+        content += new_block
+        print(f"  [+] Vytvořen nový blok Host {host_name} -> {new_ip}")
+    return content
+
+content = update_host(content, "boxa", box_a_ip)
+content = update_host(content, "boxb", box_b_ip)
+
+with open(config_path, "w") as f:
+    f.write(content)
+EOF
+        echo "[✓] ~/.ssh/config byl úspěšně aktualizován."
+    else
+        echo "[-] Soubor $SSH_CONFIG nebyl nalezen."
+    fi
+else
+    echo "[!] Žádný box nebyl detekován k zápisu do ~/.ssh/config."
+fi
+
+echo "=========================================================="
+echo " Nyní můžeš vyzkoušet přímé spojení:"
+[ -n "$BOX_A_IP" ] && echo "   ssh boxa"
+[ -n "$BOX_B_IP" ] && echo "   ssh boxb"
+echo "=========================================================="

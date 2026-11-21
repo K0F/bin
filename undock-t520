@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ~/bin/undock-t520 — Graceful fleet detachment of t520 for field operations
+# =============================================================================
+set -euo pipefail
+
+echo "========================================================"
+echo " [FLEET] t520 Undock Protocol: Preparing for Field Trip"
+echo "========================================================"
+
+# 1. Determine if running locally on t520 or remotely
+NODE="$(uname -n)"
+
+if [ "$NODE" = "t520" ]; then
+    echo "[*] Running locally on t520..."
+    
+    # Stop synergy server on t520
+    echo "[1/4] Stopping Synergy server..."
+    systemctl --user stop synergy-server 2>/dev/null || true
+    pkill synergys 2>/dev/null || true
+    
+    # Notify bazina and boxC to stop synergy clients so they don't spin in reconnect loop
+    echo "[2/4] Stopping Synergy clients on bazina and boxC..."
+    ssh -o BatchMode=yes -o ConnectTimeout=2 bazina "pkill synergyc 2>/dev/null || true" 2>/dev/null || true
+    ssh -o BatchMode=yes -o ConnectTimeout=2 boxC "pkill synergyc 2>/dev/null || true" 2>/dev/null || true
+    
+    # Unmount NFS share to avoid hung shells outside home LAN
+    echo "[3/4] Unmounting NFS /mnt/data..."
+    if mountpoint -q /mnt/data; then
+        sudo umount -l /mnt/data 2>/dev/null || true
+        echo "      /mnt/data unmounted safely."
+    else
+        echo "      /mnt/data was not mounted."
+    fi
+    
+    # Check Wireguard status
+    echo "[4/4] Verifying Wireguard 10.39.10.3 link..."
+    if ip addr show wg0 2>/dev/null | grep -q "10.39.10.3"; then
+        echo "      Wireguard (wg0: 10.39.10.3) is ACTIVE."
+    else
+        echo "      Starting Wireguard wg0..."
+        sudo wg-quick up wg0 2>/dev/null || true
+    fi
+
+else
+    echo "[*] Triggering undock protocol on t520 remotely..."
+    T520_IP="${T520_IP:-10.39.10.3}"
+    ssh -o BatchMode=yes -o ConnectTimeout=3 "$T520_IP" "bash -s" <<'EOF'
+        systemctl --user stop synergy-server 2>/dev/null || true
+        pkill synergys 2>/dev/null || true
+        if mountpoint -q /mnt/data; then
+            sudo umount -l /mnt/data 2>/dev/null || true
+        fi
+EOF
+    echo "[*] Stopping local synergy client on $(uname -n)..."
+    pkill synergyc 2>/dev/null || true
+fi
+
+echo "--------------------------------------------------------"
+echo "[✓] t520 is safe to physically unplug from the dock."
+echo "    - Synergy server & clients stopped (no CPU freeze)"
+echo "    - NFS unmounted (no frozen shells)"
+echo "    - Wireguard 10.39.10.3 ready for remote field SSH"
+echo "========================================================"
+
+if command -v now >/dev/null 2>&1; then
+    now "[FLEET/UNDOCK] t520 successfully undocked for field operations" 2>/dev/null || true
+fi
+if command -v dnes >/dev/null 2>&1; then
+    dnes done "t520 bezpečně odpojen z docku pro výjezd do terénu (undock-t520)" 2>/dev/null || true
+fi
