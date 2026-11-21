@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""
+konzdat-chronicle-audio:
+Generuje týdenní mluvenou syntézu milníků flotily z ~/src/dnes/journal.md
+do formátu Opus (hlas Kasandra, 64 kbps VBR), publikuje na web,
+ukládá na sdílené úložiště a přehrává nahlas na t520 (Axagon).
+"""
+
+import os
+import sys
+import re
+import argparse
+import subprocess
+from datetime import datetime, timedelta
+
+VOICE_PATH = os.path.expanduser("~/.local/share/piper/voices/cs_CZ-kasandra-medium.onnx")
+JOURNAL_PATH = os.path.expanduser("~/src/dnes/journal.md")
+WEB_DIR = "/var/www/html/konzdat"
+STORAGE_DIR = "/mnt/kof17"
+
+CZ_DAYS = {
+    0: "V pondělí",
+    1: "V úterý",
+    2: "Ve středu",
+    3: "Ve čtvrtek",
+    4: "V pátek",
+    5: "V sobotu",
+    6: "V neděli"
+}
+
+CZ_MONTHS = {
+    1: "ledna", 2: "února", 3: "března", 4: "dubna",
+    5: "května", 6: "června", 7: "července", 8: "srpna",
+    9: "září", 10: "října", 11: "listopadu", 12: "prosince"
+}
+
+def clean_milestone_text(text):
+    # Remove markdown links [text](url) -> text
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+    # Remove raw urls
+    text = re.sub(r"https?://\S+", "", text)
+    # Remove git hashes (7-40 hex chars)
+    text = re.sub(r"\b[0-9a-f]{7,40}\b", "", text)
+    # Remove leading tags like [12:34] or [TAG]
+    text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+    # Clean up whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+def harvest_weekly_milestones(days_back=7):
+    if not os.path.exists(JOURNAL_PATH):
+        return {}
+
+    with open(JOURNAL_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    now = datetime.now()
+    cutoff_date = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
+    parts = re.split(r"(?m)^## (\d{4}-\d{2}-\d{2})", content)
+    daily_records = {}
+
+    for i in range(1, len(parts), 2):
+        d_str = parts[i]
+        d_body = parts[i+1]
+        if d_str >= cutoff_date:
+            lines = [l.strip() for l in d_body.strip().split("\n") if l.strip().startswith("- [")]
+            cleaned = []
+            for l in lines:
+                c = clean_milestone_text(l)
+                if c and len(c) > 10 and not c.startswith("<milník>"):
+                    cleaned.append(c)
+            if cleaned:
+                daily_records[d_str] = cleaned
+
+    return daily_records
+
+def synthesize_speech_text(issue, daily_records):
+    now = datetime.now()
+    text_blocks = []
+    
+    text_blocks.append(
+        f"Zde je souhrnná týdenní kronika milníků flotily pro uzávěrku vydání {issue} "
+        f"ze dne {now.day}. {CZ_MONTHS[now.month]} {now.year}."
+    )
+
+    for d_str in sorted(daily_records.keys()):
+        dt = datetime.strptime(d_str, "%Y-%m-%d")
+        day_prefix = CZ_DAYS[dt.weekday()]
+        day_str = f"{dt.day}. {CZ_MONTHS[dt.month]}"
+        records = daily_records[d_str]
+        
+        # Pick top representative records (up to 4-5 per day to keep narrative dense)
+        chosen = records[:4]
+        day_narrative = f"{day_prefix} {day_str}: " + "; ".join(chosen) + "."
+        text_blocks.append(day_narrative)
+
+    text_blocks.append(
+        f"Tímto je uzavřen sedmidenní cyklus flotily pro číslo {issue}. "
+        "Veškeré podklady, typografické archy a tisková pé dé ef jsou připraveny k nahlédnutí i distribuci."
+    )
+
+    full_text = "\n\n".join(text_blocks)
+    # Phonetic normalization for ancient Greek τέχνη
+    full_text = re.sub(r"τέχνη", "Tékhné", full_text)
+    full_text = re.sub(r"Techné", "Téchné", full_text)
+    return full_text
+
+def main():
+    parser = argparse.ArgumentParser(description="Týdenní mluvená kronika flotily v Opus")
+    parser.add_argument("issue", nargs="?", default=f"W{datetime.now().isocalendar()[1]}", help="Kód čísla (např. W47)")
+    parser.add_argument("--no-play", action="store_true", help="Nepřehrávat zvuk na t520")
+    args = parser.parse_args()
+
+    issue = args.issue
+    print(f"[*] Sestavuji týdenní mluvenou kroniku pro {issue}...")
+    daily = harvest_weekly_milestones(7)
+    speech_text = synthesize_speech_text(issue, daily)
+    
+    tmp_txt = f"/tmp/chronicle_{issue}.txt"
+    tmp_wav = f"/tmp/chronicle_{issue}.wav"
+    tmp_opus = f"/tmp/kronika_milniku_{issue}.opus"
+
+    with open(tmp_txt, "w", encoding="utf-8") as f:
+        f.write(speech_text)
+
+    print(f"[*] Spouštím Piper TTS syntézu s hlasem Kasandra...")
+    piper_cmd = f"piper --model {VOICE_PATH} --length_scale 1.0 --output_file {tmp_wav} < {tmp_txt}"
+    res = subprocess.run(piper_cmd, shell=True)
+    if res.returncode != 0:
+        print("[-] Chyba při syntéze Piper TTS.")
+        sys.exit(1)
+
+    print(f"[*] Kóduji do Opus 64 kbps VBR...")
+    ffmpeg_cmd = f"ffmpeg -y -i {tmp_wav} -c:a libopus -b:a 64k -vbr on {tmp_opus} >/dev/null 2>&1"
+    subprocess.run(ffmpeg_cmd, shell=True, check=True)
+
+    # 1. Webroot deployment
+    os.makedirs(WEB_DIR, exist_ok=True)
+    web_dest = os.path.join(WEB_DIR, f"kronika_milniku_{issue}.opus")
+    web_latest = os.path.join(WEB_DIR, "kronika_milniku_latest.opus")
+    subprocess.run(["cp", tmp_opus, web_dest], check=True)
+    subprocess.run(["chmod", "644", web_dest], check=True)
+    if os.path.islink(web_latest) or os.path.exists(web_latest):
+        os.remove(web_latest)
+    os.symlink(f"kronika_milniku_{issue}.opus", web_latest)
+    print(f"  [+] Web: https://pešek.com/konzdat/kronika_milniku_{issue}.opus")
+    print(f"  [+] Web: https://pešek.com/konzdat/kronika_milniku_latest.opus")
+
+    # 2. Shared storage
+    if os.path.exists(STORAGE_DIR):
+        storage_dest = os.path.join(STORAGE_DIR, f"kronika_milniku_{issue}.opus")
+        subprocess.run(["cp", tmp_opus, storage_dest], check=True)
+        print(f"  [+] Úložiště: {storage_dest}")
+
+    # 3. Remote copy & Playback on t520
+    if not args.no_play:
+        print("[*] Odesílám na t520 a přehrávám přes Axagon...")
+        subprocess.run(["scp", "-q", tmp_opus, f"t520:/home/kof/kronika_milniku_{issue}.opus"], check=False)
+        subprocess.run(["ssh", "-o", "ConnectTimeout=3", "t520", f"pw-play /home/kof/kronika_milniku_{issue}.opus >/dev/null 2>&1 &"], check=False)
+
+    # Cleanup
+    for p in [tmp_txt, tmp_wav, tmp_opus]:
+        if os.path.exists(p):
+            os.remove(p)
+
+    print(f"[✓] Týdenní mluvená kronika pro {issue} byla úspěšně vytvořena a publikována.")
+
+if __name__ == "__main__":
+    main()

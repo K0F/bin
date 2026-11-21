@@ -63,13 +63,13 @@ if ! git diff-index --quiet HEAD --; then
 fi
 ssh t520 "git -C ~/src/samizdat reset --hard origin/main"
 
-# 6. Kronika a hlasové hlášení
-echo "[6/6] Zápis do kroniky a hlasové hlášení..."
-dnes done "Konzdat release: Číslo $ISSUE úspěšně publikováno na webu a přeloženo do 600 DPI PDF" || true
-now "Konzdat: Release $ISSUE dokoncen" || true
-if [ -x "$HOME/bin/mluv" ]; then
-    "$HOME/bin/mluv" "Číslo $ISSUE bylo úspěšně publikováno a je připraveno k prohlížení i tisku." || true
+# 6. Týdenní mluvená kronika v Opus & Hlasové hlášení
+echo "[6/6] Generování týdenní mluvené kroniky v Opus (Kasandra) a hlášení..."
+if [ -x "$HOME/bin/konzdat-chronicle-audio" ]; then
+    "$HOME/bin/konzdat-chronicle-audio" "$ISSUE" || true
 fi
+dnes done "Konzdat release: Číslo $ISSUE publikováno, 600 DPI PDF přeloženo, mluvená Opus kronika vygenerována" || true
+now "Konzdat: Release $ISSUE a týdenní mluvená kronika dokončeny" || true
 
 echo "=========================================================="
 echo "[✓] Vydání $ISSUE je kompletní: https://pešek.com/konzdat/"
