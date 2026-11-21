@@ -1,0 +1,15 @@
+#!/usr/bin/env zsh
+# zsh-exec — provede příkaz v zsh (login environment) a zapíše jej do ~/.zsh_history
+if [ -z "$*" ]; then
+    echo "Usage: zsh-exec <command...>"
+    exit 1
+fi
+
+CMD="$*"
+HIST_FILE="${HISTFILE:-$HOME/.zsh_history}"
+
+# Zápis do zsh_history ve standardním extended formatu (: <epoch>:0;<cmd>)
+printf ": %d:0;%s\n" "$(date +%s)" "$CMD" >> "$HIST_FILE"
+
+# Spuštění příkazu v přirozeném prostředí Zsh
+eval "$CMD"
