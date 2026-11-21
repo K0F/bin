@@ -59,7 +59,8 @@ echo "[5/6] Git commit a synchronizace repozitáře..."
 git add -A
 if ! git diff-index --quiet HEAD --; then
     git commit -m "release($ISSUE): publikace cisla do webrootu a tiskovych PDF"
-    git push origin main
+    git pull --rebase origin main || true
+    git push origin main || (git pull --rebase origin main && git push origin main)
 fi
 ssh t520 "git -C ~/src/samizdat reset --hard origin/main"
 
