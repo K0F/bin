@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""
+thesaurus / synonymum - Offline český tezaurus pro flotilu
+Využívá indexovaná data MyThes (th_cs_CZ_v2.dat / .idx).
+
+Použití:
+  thesaurus zkoumání
+  synonymum analýza
+  thesaurus --json svodka
+  thesaurus -s bádání
+"""
+
+import sys
+import os
+import argparse
+import json
+import difflib
+import unicodedata
+
+CANDIDATE_PATHS = [
+    os.path.expanduser("~/.local/share/thesaurus"),
+    "/usr/share/mythes",
+    os.path.expanduser("~/src/konzdat/data/thesaurus"),
+    "/home/kof/.local/share/thesaurus",
+]
+
+def find_thesaurus_files():
+    for base in CANDIDATE_PATHS:
+        dat = os.path.join(base, "th_cs_CZ_v2.dat")
+        idx = os.path.join(base, "th_cs_CZ_v2.idx")
+        if os.path.exists(dat) and os.path.exists(idx):
+            return dat, idx
+    return None, None
+
+def strip_accents(text):
+    return ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+
+def load_index(idx_path):
+    word_map = {}
+    lower_map = {}
+    ascii_map = {}
+    with open(idx_path, "r", encoding="utf-8", errors="replace") as f:
+        encoding = f.readline().strip()
+        count_str = f.readline().strip()
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) >= 2:
+                w = parts[0]
+                off = int(parts[1])
+                word_map[w] = off
+                lw = w.lower()
+                if lw not in lower_map:
+                    lower_map[lw] = w
+                aw = strip_accents(lw)
+                if aw not in ascii_map:
+                    ascii_map[aw] = w
+    return word_map, lower_map, ascii_map
+
+def lookup_meanings(dat_path, offset):
+    meanings = []
+    with open(dat_path, "rb") as f:
+        f.seek(offset)
+        header_line = f.readline().decode("utf-8", errors="replace").strip()
+        parts = header_line.split("|")
+        word = parts[0]
+        num_meanings = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        for _ in range(num_meanings):
+            line = f.readline().decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            m_parts = line.split("|")
+            m_type = m_parts[0] if m_parts else ""
+            synonyms = [s.strip() for s in m_parts[1:] if s.strip()]
+            meanings.append({
+                "type": m_type,
+                "synonyms": synonyms
+            })
+    return word, meanings
+
+def main():
+    parser = argparse.ArgumentParser(description="Offline český tezaurus a vyhledávač synonym")
+    parser.add_argument("query", nargs="*", help="Hledané slovo nebo slovní spojení")
+    parser.add_argument("-j", "--json", action="store_true", help="Výstup ve formátu JSON")
+    parser.add_argument("-n", "--limit", type=int, default=15, help="Maximální počet synonym na význam")
+    parser.add_argument("-s", "--similar", action="store_true", help="Hledat podobná slova při neexistenci")
+    parser.add_argument("-l", "--list", action="store_true", help="Pouze čárkami oddělený seznam synonym")
+
+    args = parser.parse_args()
+
+    if not args.query:
+        parser.print_help()
+        sys.exit(1)
+
+    term = " ".join(args.query).strip()
+    dat_path, idx_path = find_thesaurus_files()
+
+    if not dat_path:
+        sys.stderr.write("[CHYBA] Datové soubory tezauru (th_cs_CZ_v2.dat/.idx) nebyly nalezeny.\n")
+        sys.stderr.write(f"Prohledané cesty: {', '.join(CANDIDATE_PATHS)}\n")
+        sys.exit(2)
+
+    word_map, lower_map, ascii_map = load_index(idx_path)
+
+    # 1. Exact match
+    target_word = None
+    offset = None
+
+    if term in word_map:
+        target_word = term
+        offset = word_map[term]
+    elif term.lower() in lower_map:
+        target_word = lower_map[term.lower()]
+        offset = word_map[target_word]
+    elif strip_accents(term.lower()) in ascii_map:
+        target_word = ascii_map[strip_accents(term.lower())]
+        offset = word_map[target_word]
+
+    if not target_word:
+        # Check substring matches or close matches
+        term_low = term.lower()
+        substring_matches = [w for w in word_map if term_low in w.lower()][:10]
+        close_matches = difflib.get_close_matches(term_low, lower_map.keys(), n=8, cutoff=0.7)
+
+        if args.json:
+            print(json.dumps({
+                "found": False,
+                "query": term,
+                "substring_matches": substring_matches,
+                "close_matches": [lower_map[c] for c in close_matches]
+            }, ensure_ascii=False, indent=2))
+        else:
+            print(f"[!] Slovo '{term}' nebylo v tezauru nalezeno.")
+            suggestions = set(substring_matches + [lower_map[c] for c in close_matches])
+            if suggestions:
+                print("Podobná nebo příbuzná hesla:")
+                for s in sorted(suggestions):
+                    print(f"  • {s}")
+        sys.exit(3)
+
+    found_word, meanings = lookup_meanings(dat_path, offset)
+
+    if args.json:
+        result = {
+            "found": True,
+            "word": found_word,
+            "meanings_count": len(meanings),
+            "meanings": meanings
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if args.list:
+        all_syns = []
+        for m in meanings:
+            for s in m["synonyms"]:
+                if s not in all_syns and s.lower() != found_word.lower():
+                    all_syns.append(s)
+        print(", ".join(all_syns[:args.limit * 2]))
+        return
+
+    # Formatted terminal display
+    is_tty = sys.stdout.isatty()
+    BOLD = "\033[1m" if is_tty else ""
+    CYAN = "\033[36m" if is_tty else ""
+    GREEN = "\033[32m" if is_tty else ""
+    YELLOW = "\033[33m" if is_tty else ""
+    RESET = "\033[0m" if is_tty else ""
+
+    print(f"{BOLD}{CYAN}═══ Tezaurus flotily: {found_word} ({len(meanings)} významů) ═══{RESET}")
+    for idx, m in enumerate(meanings, 1):
+        m_type = f" {YELLOW}{m['type']}{RESET}" if m['type'] else ""
+        print(f"\n{BOLD}[{idx}]{RESET}{m_type}")
+        syns = [s for s in m["synonyms"] if s.lower() != found_word.lower()][:args.limit]
+        if syns:
+            print(f"  {GREEN}Synonyma:{RESET} {', '.join(syns)}")
+        else:
+            print("  (žádná další synonyma)")
+    print()
+
+if __name__ == "__main__":
+    main()
