@@ -55,14 +55,14 @@ git -C "${LOCAL_AGENTS_REPO}" push -u origin main >/dev/null 2>&1 || true
 #    a sami sebe přeskakujeme přes hostname.
 THIS_HOST="$(hostname -s)"
 for node in bazina boxC t520; do
-    if [ "$node" = "$THIS_HOST" ]; then
+    if [ "$node" = "$THIS_HOST" ] || { [ "$node" = "bazina" ] && [ "$THIS_HOST" = "permafrost" ]; } || { [ "$node" = "permafrost" ] && [ "$THIS_HOST" = "bazina" ]; }; then
         continue
     fi
     # POJISTKA: /etc/hosts na bazina/boxC stale ukazuje `192.168.1.100 t520`,
     # ale t520 je realne na 192.168.1.103 — bez overeni bychom rsyncovali na CIZI stroj.
     # Proto nejprve overime, ze na druhem konci skutecne bezi ten uzel, ktery cekame.
-    if ssh -o ConnectTimeout=2 -o BatchMode=yes "kof@${node}" \
-         "[ \"\$(hostname -s 2>/dev/null)\" = \"${node}\" ] || [ \"\$(hostname 2>/dev/null)\" = \"${node}\" ]" 2>/dev/null; then
+    REMOTE_H="$(ssh -o ConnectTimeout=2 -o BatchMode=yes "kof@${node}" "hostname -s 2>/dev/null" 2>/dev/null || true)"
+    if [ "$REMOTE_H" = "$node" ] || { [ "$node" = "bazina" ] && [ "$REMOTE_H" = "permafrost" ]; } || { [ "$node" = "permafrost" ] && [ "$REMOTE_H" = "bazina" ]; }; then
         if ssh -o ConnectTimeout=2 -o BatchMode=yes "kof@${node}" "mkdir -p ~/src/.agents ~/.agents/skills ~/.gemini/config/skills" 2>/dev/null; then
             rsync -az "${SRC_AGENTS}/" "kof@${node}:~/src/.agents/" 2>/dev/null || true
             rsync -az "${LOCAL_AGENTS_REPO}/skills/" "kof@${node}:~/.agents/skills/" 2>/dev/null || true
