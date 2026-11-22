@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# cam - Fleet webcam viewer using low-latency MJPEG stream
+set -euo pipefail
+
+DEV="${1:-/dev/video0}"
+
+if [[ ! -e "$DEV" ]]; then
+    echo "[!] Zařízení $DEV neexistuje. Je webkamera zapojena?" >&2
+    exit 1
+fi
+
+echo "[*] Otevírám $DEV (MJPEG 1280x720, low-latency)..."
+exec mpv \
+    --demuxer-lavf-format=video4linux2 \
+    --demuxer-lavf-o-set=input_format=mjpeg \
+    --demuxer-lavf-o-set=video_size=1280x720 \
+    --profile=low-latency \
+    --untimed \
+    --title="Webcam: ${DEV}" \
+    "av://v4l2:${DEV}"
