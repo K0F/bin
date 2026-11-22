@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# resume - Fleet-wide context and architecture resume CLI
+# Linework: Techné Core ⨂ Samizdat ⨂ Dnes Journaling
+
+RESUME_FILE="/home/kof/src/dnes/resume.md"
+RESUME_LINK="/home/kof/src/resume.md"
+
+# Ensure link exists
+if [ ! -L "$RESUME_LINK" ] && [ -f "$RESUME_FILE" ]; then
+    ln -sfn "$RESUME_FILE" "$RESUME_LINK" 2>/dev/null
+fi
+
+case "$1" in
+    edit|-e)
+        ${EDITOR:-nano} "$RESUME_FILE"
+        ;;
+    sync|-s)
+        echo "[*] Synchronizing resume across fleet nodes..."
+        git -C /home/kof/src/dnes add resume.md
+        git -C /home/kof/src/dnes commit -m "dnes(resume): update fleet context snapshot [$(date '+%Y-%m-%d %H:%M')]" 2>/dev/null
+        git -C /home/kof/src/dnes push origin main 2>/dev/null
+        ssh t520 "git -C /home/kof/src/dnes pull --ff-only && ln -sfn /home/kof/src/dnes/resume.md /home/kof/src/resume.md" 2>/dev/null &
+        ssh boxC "git -C /home/kof/src/dnes pull --ff-only && ln -sfn /home/kof/src/dnes/resume.md /home/kof/src/resume.md" 2>/dev/null &
+        wait
+        echo "[✓] Synchronized on bazina, t520, and boxC."
+        ;;
+    status)
+        echo "=== Fleet Resume Quick Status ==="
+        echo "Local resume file: $RESUME_FILE"
+        if [ -f "$RESUME_FILE" ]; then
+            echo "Last updated     : $(stat -c '%y' "$RESUME_FILE")"
+            echo "Lines / Size     : $(wc -l < "$RESUME_FILE") lines / $(wc -c < "$RESUME_FILE") bytes"
+        fi
+        git -C /home/kof/src/dnes status -s
+        ;;
+    help|-h|--help)
+        echo "Usage: resume [command]"
+        echo "  (no args)  Display fleet resume snapshot"
+        echo "  edit, -e   Edit resume in default editor"
+        echo "  sync, -s   Commit and push resume across bazina, t520, and boxC"
+        echo "  status     Show file and git sync status"
+        ;;
+    *)
+        if command -v glow >/dev/null 2>&1; then
+            glow "$RESUME_FILE"
+        elif command -v bat >/dev/null 2>&1; then
+            bat --style=plain "$RESUME_FILE"
+        else
+            cat "$RESUME_FILE"
+        fi
+        ;;
+esac

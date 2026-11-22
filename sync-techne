@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# sync-techne: Centrální synchronizace konfigurací Techné (.agents, skills, AGENTS.md)
+# napříč flotilou (t520 10.0.0.18, bazina 10.0.0.15, boxC 10.0.0.14) přes boxC:repos/agents.git
+set -euo pipefail
+
+CENTRAL_REPO="kof@boxC:/home/kof/repos/agents.git"
+LOCAL_AGENTS_REPO="${HOME}/.agents"
+SRC_AGENTS="${HOME}/src/.agents"
+GEMINI_CFG="${HOME}/.gemini/config"
+
+mkdir -p "${LOCAL_AGENTS_REPO}/src_agents" "${LOCAL_AGENTS_REPO}/skills" "${SRC_AGENTS}" "${GEMINI_CFG}"
+
+# 1. Inicializace git repozitáře v ~/.agents pokud ještě není napojen na boxC:repos/agents.git
+if [ ! -d "${LOCAL_AGENTS_REPO}/.git" ]; then
+    git -C "${LOCAL_AGENTS_REPO}" init -b main >/dev/null 2>&1 || git -C "${LOCAL_AGENTS_REPO}" init >/dev/null 2>&1
+    git -C "${LOCAL_AGENTS_REPO}" branch -M main
+    git -C "${LOCAL_AGENTS_REPO}" remote add origin "${CENTRAL_REPO}" 2>/dev/null || git -C "${LOCAL_AGENTS_REPO}" remote set-url origin "${CENTRAL_REPO}"
+fi
+
+# 2. Stažení nejnovějšího stavu z centrálního repozitáře
+git -C "${LOCAL_AGENTS_REPO}" pull --rebase origin main >/dev/null 2>&1 || true
+
+# 3. Sloučení ~/src/.agents <-> ~/.agents/src_agents (novější soubory vyhrávají)
+cp -f "${HOME}/src/.agents/TECHNE.md" "${HOME}/src/.agents/README.md" 2>/dev/null || true
+rsync -au "${SRC_AGENTS}/" "${LOCAL_AGENTS_REPO}/src_agents/"
+rsync -au "${LOCAL_AGENTS_REPO}/src_agents/" "${SRC_AGENTS}/"
+if [ -d "${GEMINI_CFG}/skills" ]; then
+    rsync -au "${GEMINI_CFG}/skills/" "${LOCAL_AGENTS_REPO}/skills/"
+fi
+rsync -au "${LOCAL_AGENTS_REPO}/skills/" "${GEMINI_CFG}/skills/"
+[ -L "${LOCAL_AGENTS_REPO}/AGENTS.md" ] && [ ! -e "${LOCAL_AGENTS_REPO}/AGENTS.md" ] && rm -f "${LOCAL_AGENTS_REPO}/AGENTS.md"
+[ -f "${HOME}/src/actors.md" ] && cp -uf "${HOME}/src/actors.md" "${LOCAL_AGENTS_REPO}/actors.md"
+[ -f "${HOME}/src/AGENTS.md" ] && cp -uf "${HOME}/src/AGENTS.md" "${LOCAL_AGENTS_REPO}/AGENTS.md"
+[ -f "${GEMINI_CFG}/GEMINI.md" ] && cp -uf "${GEMINI_CFG}/GEMINI.md" "${LOCAL_AGENTS_REPO}/GEMINI.md"
+[ -f "${LOCAL_AGENTS_REPO}/GEMINI.md" ] && cp -uf "${LOCAL_AGENTS_REPO}/GEMINI.md" "${GEMINI_CFG}/GEMINI.md"
+# 2026-11-11: bylo `cp -f` (bezpodmínečně) — kombinace s `-u` o řádek výš znamenala,
+# že když měl ~/.agents/AGENTS.md MLADŠÍ mtime ale STARŠÍ obsah, přepsal se jím
+# novější ~/.gemini/config/AGENTS.md. Novější vyhrává i tady.
+[ -f "${LOCAL_AGENTS_REPO}/AGENTS.md" ] && cp -uf "${LOCAL_AGENTS_REPO}/AGENTS.md" "${GEMINI_CFG}/AGENTS.md"
+
+# 4. Commit a push do centrálního repozitáře boxC:repos/agents.git
+git -C "${LOCAL_AGENTS_REPO}" add -A
+if ! git -C "${LOCAL_AGENTS_REPO}" diff --cached --quiet; then
+    HOST_TAG="$(hostname)"
+    TS="$(date -Iseconds)"
+    git -C "${LOCAL_AGENTS_REPO}" commit -m "sync-techne(${HOST_TAG}): ${TS}" >/dev/null 2>&1 || true
+fi
+git -C "${LOCAL_AGENTS_REPO}" push -u origin main >/dev/null 2>&1 || true
+
+# 5. Přímý broadcast do ostatních živých uzlů na LAN
+#    2026-11-11 (t520): původní cíle 10.0.0.18/15/14 jsou MRTVÉ — síť 10.0.0.0/24
+#    v LAN neexistuje (žádný uzel nemá 10.0.0.x; skutečné adresy jsou t520 192.168.1.103,
+#    bazina 192.168.1.104, boxC 192.168.1.101), takže broadcast tiše selhával a tím
+#    vznikla odchlýplá AGENTS.md na boxC. Cíle proto bereme z ~/.ssh/config (aliasy)
+#    a sami sebe přeskakujeme přes hostname.
+THIS_HOST="$(hostname -s)"
+for node in bazina boxC t520; do
+    if [ "$node" = "$THIS_HOST" ]; then
+        continue
+    fi
+    # POJISTKA: /etc/hosts na bazina/boxC stale ukazuje `192.168.1.100 t520`,
+    # ale t520 je realne na 192.168.1.103 — bez overeni bychom rsyncovali na CIZI stroj.
+    # Proto nejprve overime, ze na druhem konci skutecne bezi ten uzel, ktery cekame.
+    if ssh -o ConnectTimeout=2 -o BatchMode=yes "kof@${node}" \
+         "[ \"\$(hostname -s 2>/dev/null)\" = \"${node}\" ] || [ \"\$(hostname 2>/dev/null)\" = \"${node}\" ]" 2>/dev/null; then
+        if ssh -o ConnectTimeout=2 -o BatchMode=yes "kof@${node}" "mkdir -p ~/src/.agents ~/.agents/skills ~/.gemini/config/skills" 2>/dev/null; then
+            rsync -az "${SRC_AGENTS}/" "kof@${node}:~/src/.agents/" 2>/dev/null || true
+            rsync -az "${LOCAL_AGENTS_REPO}/skills/" "kof@${node}:~/.agents/skills/" 2>/dev/null || true
+            rsync -az "${LOCAL_AGENTS_REPO}/skills/" "kof@${node}:~/.gemini/config/skills/" 2>/dev/null || true
+            [ -f "${HOME}/src/actors.md" ] && rsync -az "${HOME}/src/actors.md" "kof@${node}:~/src/actors.md" 2>/dev/null || true
+            [ -f "${HOME}/src/AGENTS.md" ] && rsync -az "${HOME}/src/AGENTS.md" "kof@${node}:~/src/AGENTS.md" 2>/dev/null || true
+            [ -f "${HOME}/src/AGENTS.md" ] && rsync -az "${HOME}/src/AGENTS.md" "kof@${node}:~/.gemini/config/AGENTS.md" 2>/dev/null || true
+            [ -f "${GEMINI_CFG}/GEMINI.md" ] && rsync -az "${GEMINI_CFG}/GEMINI.md" "kof@${node}:~/.gemini/config/GEMINI.md" 2>/dev/null || true
+            [ -f "${GEMINI_CFG}/GEMINI.md" ] && rsync -az "${GEMINI_CFG}/GEMINI.md" "kof@${node}:~/.agents/GEMINI.md" 2>/dev/null || true
+            echo "[✓] Techné synchronizována -> ${node}"
+        fi
+    else
+        echo "[!] ${node}: vzdálený hostname nesedí (nebo nedostupné) — PŘESKOČENO, zkontroluj /etc/hosts"
+    fi
+done

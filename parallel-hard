@@ -1,0 +1,19 @@
+#!/bin/bash
+# parallel-hard: Distributed execution engine for heavy compute jobs across the 16-core fleet cluster
+# Automatically distributes tasks to t520 (8 cores), bazina (4 cores), and boxC (4 cores)
+# with dynamic load balancing, nice 10 prioritization, automatic retry on failure, and job logging.
+
+if [ $# -eq 0 ]; then
+    echo "Usage: parallel-hard <command> ::: <arguments...>"
+    echo "       cat task_list.txt | parallel-hard <command>"
+    echo ""
+    echo "Cluster nodes (16 cores total):"
+    echo "  - t520   (8 cores, local server)"
+    echo "  - bazina (4 cores, 10.0.0.15 compute/GPU)"
+    echo "  - boxC   (4 cores, 10.0.0.14 storage)"
+    echo ""
+    echo "Joblog: ~/.parallel/joblog_hard.txt"
+    exit 1
+fi
+
+exec parallel --profile hard "$@"

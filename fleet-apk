@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# =============================================================================
+# fleet-apk — Offloaded Android NDK/Gradle Builder (bazina 16GB RAM) & Publisher
+# =============================================================================
+# Usage:
+#   fleet-apk sync-sdk                  Mirror Android SDK/NDK + keystore to bazina
+#   fleet-apk build <project> [release] Build APK on bazina (16GB RAM) & sign
+#   fleet-apk install <project>         Install APK via ADB on t520 or bazina
+#   fleet-apk publish <project>         Publish APK to https://pešek.com/apk/ + QR
+#   fleet-apk all <project>             Build + publish + install (if ADB connected)
+#   fleet-apk termux <sketch_dir> [ip]  Run pde2c/Raylib sketch in Android Termux
+# =============================================================================
+set -euo pipefail
+
+SRC_DIR="${SRC_DIR:-$HOME/src}"
+BAZINA_HOST="${BAZINA_HOST:-10.0.0.15}"
+T520_HOST="${T520_HOST:-10.0.0.18}"
+BOXC_HOST="${BOXC_HOST:-10.0.0.14}"
+HOSTNAME_SHORT="$(hostname -s)"
+APK_WEB_URL="https://xn--peek-h6a.com/apk"
+APK_HUMAN_URL="https://pešek.com/apk"
+
+log_now() {
+    if command -v now >/dev/null 2>&1; then
+        now "[FLEET-APK] $*" >/dev/null 2>&1 || true
+    fi
+    if [ -d "$SRC_DIR/.agents" ]; then
+        printf "[%s] [%s] [fleet-apk] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$HOSTNAME_SHORT" "$*" >> "$SRC_DIR/.agents/commands.log"
+    fi
+}
+
+find_java_home() {
+    for d in /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk /usr/lib/jvm/java-21-openjdk-amd64 /usr/lib/jvm/default-java; do
+        if [ -x "$d/bin/java" ]; then
+            echo "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+cmd_sync_sdk() {
+    echo "== [fleet-apk] Provisioning Android SDK/NDK, FFmpeg arm64 & Keystore on bazina ($BAZINA_HOST) =="
+    if [ "$HOSTNAME_SHORT" = "bazina" ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq openjdk-17-jdk-headless qrencode zipalign apksigner adb
+        mkdir -p "$HOME/Android/Sdk" "$HOME/Android/ffmpeg"
+        echo "[*] Pulling ~/Android/Sdk from t520 ($T520_HOST) to bazina SSD..."
+        rsync -az --info=progress2 "kof@${T520_HOST}:/home/kof/Android/" "$HOME/Android/"
+        rsync -az "kof@${T520_HOST}:/home/kof/kof.keystore" "$HOME/kof.keystore" 2>/dev/null || true
+    else
+        ssh "$BAZINA_HOST" "sudo apt-get update -qq && sudo apt-get install -y -qq openjdk-17-jdk-headless qrencode zipalign apksigner adb && mkdir -p /home/kof/Android"
+        ssh "$T520_HOST" "rsync -az /home/kof/Android/ kof@${BAZINA_HOST}:/home/kof/Android/ && rsync -az /home/kof/kof.keystore kof@${BAZINA_HOST}:/home/kof/kof.keystore 2>/dev/null || true"
+    fi
+    log_now "Synced Android SDK/NDK and keystore to bazina"
+    echo "[✓] Android SDK/NDK ready on bazina:/home/kof/Android/Sdk."
+}
+
+cmd_build() {
+    local proj="${1:-}"
+    local mode="${2:-release}"
+    if [ -z "$proj" ]; then
+        echo "Usage: fleet-apk build <project> [release|debug]" >&2
+        exit 1
+    fi
+
+    # If invoked on t520 or boxC, sync sources to bazina and offload the build there
+    if [ "$HOSTNAME_SHORT" != "bazina" ]; then
+        echo "== [fleet-apk] Offloading Android build of '$proj' ($mode) to bazina ($BAZINA_HOST, 16GB RAM) =="
+        if [ -d "$SRC_DIR/$proj" ]; then
+            rsync -az --exclude='.gradle' --exclude='android/.gradle' --exclude='android/app/build' \
+                "$SRC_DIR/$proj/" "kof@${BAZINA_HOST}:/home/kof/src/$proj/"
+        fi
+        ssh "$BAZINA_HOST" "/home/kof/bin/fleet-apk build '$proj' '$mode'"
+        echo "[*] Copying compiled APK(s) back to $HOSTNAME_SHORT:$SRC_DIR/$proj/ ..."
+        rsync -az "kof@${BAZINA_HOST}:/home/kof/src/$proj/*.apk" "$SRC_DIR/$proj/" 2>/dev/null || true
+        return 0
+    fi
+
+    # Running directly on bazina
+    local proj_dir="$SRC_DIR/$proj"
+    if [ ! -d "$proj_dir" ]; then
+        echo "[*] Project $proj not yet on bazina; syncing from t520..."
+        mkdir -p "$proj_dir"
+        rsync -az "kof@${T520_HOST}:/home/kof/src/$proj/" "$proj_dir/"
+    fi
+
+    local java_home
+    java_home="$(find_java_home)"
+    export ANDROID_HOME="$HOME/Android/Sdk"
+    export JAVA_HOME="$java_home"
+    export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+    echo "== [fleet-apk] Building '$proj' ($mode) on bazina (JAVA_HOME=$JAVA_HOME, ANDROID_HOME=$ANDROID_HOME) =="
+    cd "$proj_dir"
+
+    if [ -d "android" ] && [ -x "android/gradlew" ]; then
+        echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+        # Allow up to 4GB heap on bazina's 16GB RAM
+        if grep -q "org.gradle.jvmargs" android/gradle.properties 2>/dev/null; then
+            sed -i 's/org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4g/' android/gradle.properties
+        fi
+
+        local gradle_task="assembleRelease"
+        [ "$mode" = "debug" ] && gradle_task="assembleDebug"
+
+        if [ "$proj" = "palStreamer" ] && grep -q "prepare-jnilibs:" Makefile 2>/dev/null; then
+            make ANDROID_HOME="$ANDROID_HOME" JAVA_HOME="$JAVA_HOME" FFMPEG_ROOT="$HOME/Android/ffmpeg/arm64-v8a" prepare-jnilibs || true
+        fi
+
+        (
+            cd android
+            ./gradlew "$gradle_task" --no-daemon
+        )
+
+        # Locate built APK
+        local built_apk=""
+        if [ "$mode" = "debug" ]; then
+            built_apk="$(find android/app/build/outputs/apk -name '*-debug.apk' | head -n 1)"
+        else
+            built_apk="$(find android/app/build/outputs/apk -name '*-release*.apk' | head -n 1)"
+        fi
+
+        if [ -z "$built_apk" ] || [ ! -f "$built_apk" ]; then
+            echo "Error: No APK found after Gradle build in $proj_dir/android/app/build/outputs/apk" >&2
+            exit 1
+        fi
+
+        local out_apk="${proj_dir}/${proj}.apk"
+        [ "$mode" = "release" ] && out_apk="${proj_dir}/${proj}-release.apk"
+
+        # If unsigned release APK and keystore exists, sign it
+        if [[ "$built_apk" == *unsigned* ]] && [ -f "$HOME/kof.keystore" ]; then
+            echo "[*] Signing unsigned release APK with ~/kof.keystore..."
+            cp "$built_apk" "${proj_dir}/${proj}-release-unsigned.apk"
+            "$HOME/bin/androidSign" "${proj_dir}/${proj}-release-unsigned.apk" || cp "$built_apk" "$out_apk"
+            [ -f "${proj_dir}/${proj}.apk" ] && cp "${proj_dir}/${proj}.apk" "$out_apk"
+        else
+            cp "$built_apk" "$out_apk"
+            cp "$built_apk" "${proj_dir}/${proj}.apk"
+        fi
+
+        ls -lh "$out_apk"
+        log_now "Built $out_apk on bazina"
+        echo "[✓] Successfully built: $out_apk"
+    else
+        echo "Error: $proj_dir does not contain an android/gradlew project. For Termux sketches use: fleet-apk termux <dir>" >&2
+        exit 1
+    fi
+}
+
+cmd_publish() {
+    local proj="${1:-}"
+    if [ -z "$proj" ]; then
+        echo "Usage: fleet-apk publish <project>" >&2
+        exit 1
+    fi
+
+    local proj_dir="$SRC_DIR/$proj"
+    local apk_file=""
+    for candidate in "$proj_dir/${proj}-release.apk" "$proj_dir/${proj,,}-release.apk" "$proj_dir/${proj}.apk" "$proj_dir/${proj,,}.apk"; do
+        if [ -f "$candidate" ]; then
+            apk_file="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$apk_file" ]; then
+        echo "[*] No local APK found for $proj; building first..."
+        cmd_build "$proj" release
+        for candidate in "$proj_dir/${proj}-release.apk" "$proj_dir/${proj}.apk"; do
+            if [ -f "$candidate" ]; then
+                apk_file="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$apk_file" ] || [ ! -f "$apk_file" ]; then
+        echo "Error: APK file not found for $proj" >&2
+        exit 1
+    fi
+
+    local dest_name="${proj}.apk"
+    echo "== [fleet-apk] Publishing $apk_file -> boxC:/var/www/html/apk/$dest_name =="
+    ssh "$BOXC_HOST" "mkdir -p /var/www/html/apk"
+    scp -q "$apk_file" "kof@${BOXC_HOST}:/var/www/html/apk/$dest_name"
+
+    # Regenerate /var/www/html/apk/index.html on boxC
+    ssh "$BOXC_HOST" 'bash -s' << 'EOF'
+set -e
+cd /var/www/html/apk
+cat > index.html << 'HTMLHEAD'
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBSERVATOŘ // ANDROID APK REPOSITORY (boxC)</title>
+<style>
+  body { background: #e3e3e3; color: #333; font-family: "IBM Plex Mono", monospace; max-width: 860px; margin: 24px auto; padding: 0 16px; }
+  h1 { border-bottom: 3px solid #333; padding-bottom: 8px; text-transform: uppercase; font-size: 1.35rem; }
+  .meta { font-size: 0.85rem; margin-bottom: 20px; color: #555; }
+  table { width: 100%; border-collapse: collapse; background: #ededed; border: 2px solid #333; }
+  th, td { border: 1px solid #555; padding: 10px; text-align: left; font-size: 0.85rem; }
+  th { background: #333; color: #e3e3e3; text-transform: uppercase; }
+  a.btn { display: inline-block; background: #333; color: #e3e3e3; text-decoration: none; padding: 4px 10px; font-weight: bold; }
+  a.btn:hover { background: #000; }
+  .sha { font-size: 0.72rem; word-break: break-all; color: #555; }
+</style>
+</head>
+<body>
+<h1>THE OBSERVATOŘ // ANDROID APK DISTRIBUCE</h1>
+<div class="meta">Uzel: boxC (10.0.0.14) · Kompilace: bazina (16 GB RAM, NDK/Gradle) · Poslední aktualizace:
+HTMLHEAD
+date '+%Y-%m-%d %H:%M:%S CET' >> index.html
+cat >> index.html << 'HTMLMID'
+</div>
+<table>
+<thead>
+<tr><th>Balíček (.apk)</th><th>Velikost</th><th>Datum sestavení</th><th>SHA-256</th><th>Stáhnout</th></tr>
+</thead>
+<tbody>
+HTMLMID
+
+for f in *.apk; do
+  [ -f "$f" ] || continue
+  sz="$(du -h "$f" | awk '{print $1}')"
+  dt="$(date -r "$f" '+%Y-%m-%d %H:%M')"
+  sha="$(sha256sum "$f" | awk '{print $1}')"
+  echo "<tr><td><strong>$f</strong></td><td>$sz</td><td>$dt</td><td class=\"sha\">$sha</td><td><a class=\"btn\" href=\"$f\">STÁHNOUT APK</a></td></tr>" >> index.html
+done
+
+cat >> index.html << 'HTMLFOOT'
+</tbody>
+</table>
+</body>
+</html>
+HTMLFOOT
+sudo chown -R kof:www-data /var/www/html/apk
+sudo chmod -R 775 /var/www/html/apk
+EOF
+
+    local full_url="${APK_WEB_URL}/${dest_name}"
+    echo "[✓] Published live at: ${APK_HUMAN_URL}/${dest_name} (${full_url})"
+    if command -v qrencode >/dev/null 2>&1; then
+        echo "--- Scan QR Code to install ${dest_name} on Android ---"
+        qrencode -t ANSIUTF8 "$full_url"
+    fi
+    log_now "Published $dest_name to $full_url"
+}
+
+cmd_install() {
+    local proj="${1:-}"
+    if [ -z "$proj" ]; then
+        echo "Usage: fleet-apk install <project>" >&2
+        exit 1
+    fi
+    local proj_dir="$SRC_DIR/$proj"
+    local apk_file=""
+    for candidate in "$proj_dir/${proj}-release.apk" "$proj_dir/${proj}.apk" "$proj_dir/${proj,,}-release.apk" "$proj_dir/${proj,,}.apk"; do
+        if [ -f "$candidate" ]; then
+            apk_file="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$apk_file" ]; then
+        echo "Error: No built APK found in $proj_dir. Run 'fleet-apk build $proj' first." >&2
+        exit 1
+    fi
+
+    # Check local ADB first, then remote node ADB
+    if adb get-state >/dev/null 2>&1; then
+        echo "== [fleet-apk] Installing $apk_file onto local ADB device on $HOSTNAME_SHORT =="
+        adb install -r "$apk_file"
+    elif [ "$HOSTNAME_SHORT" != "t520" ] && ssh "$T520_HOST" "adb get-state" >/dev/null 2>&1; then
+        echo "== [fleet-apk] Installing $apk_file via ADB on t520 ($T520_HOST) =="
+        scp -q "$apk_file" "kof@${T520_HOST}:/tmp/install_target.apk"
+        ssh "$T520_HOST" "adb install -r /tmp/install_target.apk && rm -f /tmp/install_target.apk"
+    elif [ "$HOSTNAME_SHORT" != "bazina" ] && ssh "$BAZINA_HOST" "adb get-state" >/dev/null 2>&1; then
+        echo "== [fleet-apk] Installing $apk_file via ADB on bazina ($BAZINA_HOST) =="
+        scp -q "$apk_file" "kof@${BAZINA_HOST}:/tmp/install_target.apk"
+        ssh "$BAZINA_HOST" "adb install -r /tmp/install_target.apk && rm -f /tmp/install_target.apk"
+    else
+        echo "[!] No USB/Wi-Fi ADB device currently attached to t520 or bazina."
+        echo "    Use 'fleet-apk publish $proj' to install over HTTPS QR code."
+        return 1
+    fi
+    log_now "Installed $apk_file via ADB"
+}
+
+cmd_termux() {
+    local sketch_dir="${1:-$PWD}"
+    local phone_host="${2:-phone}"
+    if [ ! -d "$sketch_dir" ]; then
+        echo "Error: Sketch directory $sketch_dir not found." >&2
+        exit 1
+    fi
+    local name
+    name="$(basename "$(readlink -f "$sketch_dir")")"
+    echo "== [fleet-apk] Syncing Raylib/Processing sketch '$name' to Termux ($phone_host) =="
+    ssh -p 8022 "$phone_host" "mkdir -p ~/sketches/$name"
+    rsync -avz -e "ssh -p 8022" "$sketch_dir/" "${phone_host}:~/sketches/$name/"
+    ssh -p 8022 "$phone_host" "cd ~/src/processing.h && ./runAndroid.sh ~/sketches/$name"
+}
+
+ACTION="${1:-}"
+shift || true
+
+case "$ACTION" in
+    sync-sdk) cmd_sync_sdk "$@" ;;
+    build)    cmd_build "$@" ;;
+    publish)  cmd_publish "$@" ;;
+    install)  cmd_install "$@" ;;
+    all)
+        proj="${1:-}"
+        cmd_build "$proj" release
+        cmd_publish "$proj"
+        cmd_install "$proj" || true
+        ;;
+    termux)   cmd_termux "$@" ;;
+    *)
+        echo "Usage: fleet-apk <sync-sdk|build <proj>|publish <proj>|install <proj>|all <proj>|termux <dir> [host]>" >&2
+        exit 1
+        ;;
+esac

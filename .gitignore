@@ -1,3 +1,26 @@
 fleet-beacon-c
 *.o
 *.a
+*.tar.gz
+*.zip
+*.log
+*.bak
+*.tmp
+__pycache__/
+*.pyc
+
+# Architecture-specific compiled ELF binaries (built locally or in arch/)
+arduino-cli
+fleetMonitor
+netjitter
+till
+dada
+michacka
+postgen
+genmontage
+raymontage
+gh
+rtl_wmbus
+llama-server
+llama-bench
+wa-post

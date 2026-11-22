@@ -1,0 +1,130 @@
+#!/bin/bash
+# later — Future-time counterpart to `now`, integrated with `till` (K0F/till)
+# Logs future-stamped events to /home/kof/src/later/log, commits & pushes to
+# boxC:/home/kof/repos/later.git (and github), and optionally counts down via `till`.
+
+set -e
+
+LATER_DIR="/home/kof/src/later"
+LOG_FILE="$LATER_DIR/log"
+TILL_BIN="/home/kof/bin/till"
+export TZ="Europe/Prague"
+
+mkdir -p "$LATER_DIR"
+touch "$LOG_FILE"
+
+if [ "$1" = "list" ] || [ "$1" = "status" ]; then
+    NOW_TS=$(date +%s.%N)
+    echo "=== LATER LEDGER (now = $NOW_TS / $(date '+%Y-%m-%d %H:%M:%S %Z')) ==="
+    if [ ! -s "$LOG_FILE" ]; then
+        echo "(empty)"
+        exit 0
+    fi
+    awk -v now="$NOW_TS" '{
+        ts = $1 + 0;
+        state = (ts > now) ? "▲ FUTURE " : "✓ ARRIVED";
+        printf "  [%s | ΔT=%+8.1fs] %s\n", state, ts - now, $0;
+    }' "$LOG_FILE"
+    exit 0
+fi
+
+TARGET_HHMM=""
+EXEC_CMD=""
+WAIT_TILL=0
+OFFSET_SEC=2400 # Default future horizon: +1.00.00 dh36 = 1/36 day = 2400 s (40 min)
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -t|--till)
+            TARGET_HHMM="$2"
+            shift 2
+            ;;
+        @*)
+            TARGET_HHMM="${1#@}"
+            shift
+            ;;
+        -c|--cmd)
+            EXEC_CMD="$2"
+            WAIT_TILL=1
+            shift 2
+            ;;
+        -w|--wait)
+            WAIT_TILL=1
+            shift
+            ;;
+        -d|--dh)
+            # Offset in dh36 units (1.0 dh36 = 2400 s)
+            OFFSET_SEC=$(awk -v d="$2" 'BEGIN { printf "%.0f", d * 2400 }')
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Check if category tag is provided, e.g. [TAG] or "[TAG] message"
+if [[ "$1" =~ ^\[([^]]+)\][[:space:]]*(.*)$ ]]; then
+    CATEGORY="${BASH_REMATCH[1]^^}"
+    REST="${BASH_REMATCH[2]}"
+    shift
+    if [ -n "$REST" ]; then
+        ARGS="$REST${*:+ }$*"
+    else
+        ARGS="$*"
+    fi
+else
+    CATEGORY="LATER"
+    ARGS="$*"
+fi
+
+if [ -z "$ARGS" ] && [ -n "$EXEC_CMD" ]; then
+    ARGS="$EXEC_CMD"
+fi
+
+if [ -z "$ARGS" ]; then
+    echo "Usage: later [-t HH:MM | @HH:MM] [-d DH36_OFFSET] [-w] [-c CMD] \"[TAG] message\""
+    exit 1
+fi
+
+NOW_S=$(date +%s)
+NOW_NS=$(date +%N)
+
+if [ -n "$TARGET_HHMM" ]; then
+    TARGET_EPOCH=$(date -d "today $TARGET_HHMM" +%s 2>/dev/null || date -d "$TARGET_HHMM" +%s)
+    if [ "$TARGET_EPOCH" -le "$NOW_S" ]; then
+        TARGET_EPOCH=$((TARGET_EPOCH + 86400))
+    fi
+    TS="${TARGET_EPOCH}.${NOW_NS}"
+else
+    TARGET_EPOCH=$((NOW_S + OFFSET_SEC))
+    TS="${TARGET_EPOCH}.${NOW_NS}"
+    TARGET_HHMM=$(date -d "@$TARGET_EPOCH" +%H:%M)
+fi
+
+HUMAN_TARGET=$(date -d "@$TARGET_EPOCH" '+%Y-%m-%d %H:%M:%S %Z')
+
+# Log to file
+echo "$TS [$CATEGORY] (@$TARGET_HHMM) $ARGS" >> "$LOG_FILE"
+
+# Print to stdout
+echo "$TS -> $HUMAN_TARGET (@$TARGET_HHMM)"
+
+# Git operations
+cd "$LATER_DIR"
+git add log
+git commit -m "$TS [$CATEGORY] (@$TARGET_HHMM) $ARGS" >/dev/null 2>&1 || true
+git pull --rebase origin main >/dev/null 2>&1 || true
+git push origin main >/dev/null 2>&1 || true
+if git remote | grep -qx github; then
+    git push github main >/dev/null 2>&1 || true
+fi
+
+# If -w / -c was passed, run `till` countdown and materialize into `now` upon arrival
+if [ "$WAIT_TILL" -eq 1 ] && [ -x "$TILL_BIN" ]; then
+    FINAL_CMD="/home/kof/bin/now \"[$CATEGORY] $ARGS\""
+    if [ -n "$EXEC_CMD" ]; then
+        FINAL_CMD="$EXEC_CMD && $FINAL_CMD"
+    fi
+    "$TILL_BIN" -t "$TARGET_HHMM" -c "$FINAL_CMD"
+fi

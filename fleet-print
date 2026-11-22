@@ -1,0 +1,3 @@
+#!/bin/bash
+# Fleet-wide CLI shortcut to print the fleet schematic
+exec bash /home/kof/.gemini/config/skills/fleet-print/scripts/print_diagram.sh "$@"

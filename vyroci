@@ -1,0 +1,9 @@
+#!/bin/bash
+# Launch vintage OKsoftware "Svátky a výročí" (2006) via Wine
+DIR="$HOME/Vyroci"
+if [ ! -d "$DIR" ]; then
+    echo "Directory $DIR not found!" >&2
+    exit 1
+fi
+cd "$DIR" || exit 1
+WINEDEBUG=-all wine "$DIR/Vyroci.exe" "$@"

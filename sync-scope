@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+# sync-scope: Manage multi-scope synchronization across devices
+set -euo pipefail
+
+if [ -f "$HOME/.local/state/syncthing/config.xml" ]; then
+    CONFIG_FILE="$HOME/.local/state/syncthing/config.xml"
+elif [ -f "$HOME/.config/syncthing/config.xml" ]; then
+    CONFIG_FILE="$HOME/.config/syncthing/config.xml"
+elif [ -f "$HOME/syncthing/config.xml" ]; then
+    CONFIG_FILE="$HOME/syncthing/config.xml"
+else
+    echo "Error: Syncthing config not found in ~/.local/state/syncthing, ~/.config/syncthing, or ~/syncthing" >&2
+    exit 1
+fi
+
+API_KEY=$(sed -n '/<gui/,/<\/gui>/p' "$CONFIG_FILE" | grep -oPm1 '(?<=<apikey>)[^<]+' || true)
+GUI_ADDR=$(sed -n '/<gui/,/<\/gui>/p' "$CONFIG_FILE" | grep -oPm1 '(?<=<address>)[^<]+' || echo "127.0.0.1:8384")
+BASE_URL="http://$GUI_ADDR"
+
+api_get() {
+    curl -s -f -H "X-API-Key: $API_KEY" "$BASE_URL$1"
+}
+
+api_post() {
+    curl -s -f -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" -X POST -d "$2" "$BASE_URL$1"
+}
+
+api_put() {
+    curl -s -f -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" -X PUT -d "$2" "$BASE_URL$1"
+}
+
+get_my_id() {
+    api_get "/rest/system/status" | jq -r '.myID'
+}
+
+cmd_id() {
+    local my_id
+    my_id=$(get_my_id)
+    echo "This device ($(hostname)) ID:"
+    echo "  $my_id"
+}
+
+cmd_qr() {
+    local my_id
+    my_id=$(get_my_id)
+    echo "Scan this QR code with the Syncthing app on Android or Chromebook:"
+    echo ""
+    if command -v qrencode >/dev/null 2>&1; then
+        qrencode -t ANSIUTF8 "$my_id"
+    else
+        echo "(qrencode not installed)"
+    fi
+    echo ""
+    echo "Device ID: $my_id"
+}
+
+cmd_devices() {
+    echo "=== Configured Devices ==="
+    local conns
+    conns=$(api_get "/rest/system/connections" 2>/dev/null || echo "{}")
+    local devs
+    devs=$(api_get "/rest/config/devices" 2>/dev/null || echo "[]")
+    
+    echo "$devs" | jq -r --argjson conns "$conns" '.[] | 
+        .deviceID as $id |
+        ($conns.connections[$id] // {}) as $c |
+        (if $c.connected == true then "ONLINE  (via " + ($c.address // "direct") + ")" else "OFFLINE" end) as $status |
+        "• \(.name // "unnamed") [\($id[0:7])...] -> " + $status'
+}
+
+cmd_pending() {
+    local pending_devs
+    pending_devs=$(api_get "/rest/cluster/pending/devices" 2>/dev/null || echo "{}")
+    local pending_folders
+    pending_folders=$(api_get "/rest/cluster/pending/folders" 2>/dev/null || echo "{}")
+    
+    local dev_count
+    dev_count=$(echo "$pending_devs" | jq 'keys | length')
+    local folder_count
+    folder_count=$(echo "$pending_folders" | jq 'keys | length')
+    
+    if [ "$dev_count" -gt 0 ]; then
+        echo "=== Pending Device Invitations ==="
+        echo "$pending_devs" | jq -r 'to_entries[] | "• \(.key[0:7])... (\(.value.name // "unnamed")) from \(.value.address // "unknown")"'
+    fi
+    if [ "$folder_count" -gt 0 ]; then
+        echo "=== Pending Folder Invitations ==="
+        echo "$pending_folders" | jq -r 'to_entries[] | "• Scope: \(.key) (label: \(.value.label // .key)) from \(.value.offeredBy[0:7])..."'
+    fi
+    if [ "$dev_count" -eq 0 ] && [ "$folder_count" -eq 0 ]; then
+        echo "No pending device or folder invitations."
+    fi
+}
+
+cmd_list() {
+    echo "=== Synced Scopes (Folders) ==="
+    local folders
+    folders=$(api_get "/rest/config/folders" 2>/dev/null || echo "[]")
+    
+    echo "$folders" | jq -c '.[]' | while read -r folder; do
+        local fid
+        fid=$(echo "$folder" | jq -r '.id')
+        local fpath
+        fpath=$(echo "$folder" | jq -r '.path')
+        local fdevs
+        fdevs=$(echo "$folder" | jq -r '[.devices[].deviceID[0:7]] | join(", ")')
+        local status
+        status=$(api_get "/rest/db/status?folder=$fid" 2>/dev/null || echo "{}")
+        local state
+        state=$(echo "$status" | jq -r '.state // "unknown"')
+        local need
+        need=$(echo "$status" | jq -r '.needBytes // 0')
+        local total
+        total=$(echo "$status" | jq -r '.globalBytes // 0')
+        local pct=100
+        if [ "$total" -gt 0 ] && [ "$need" -gt 0 ]; then
+            pct=$(( (total - need) * 100 / total ))
+        fi
+        echo "• Scope: $fid [$state - ${pct}%] | Path: $fpath | Devices: $fdevs"
+    done
+}
+
+cmd_status() {
+    echo "=== Syncthing Service Status ==="
+    systemctl --user status syncthing --no-pager -n 3 2>/dev/null || true
+    echo ""
+    cmd_devices
+    echo ""
+    cmd_list
+    echo ""
+    cmd_pending
+}
+
+cmd_ignore() {
+    local target_dir="${1:-.}"
+    local ignore_file="$target_dir/.stignore"
+    
+    if [ -f "$ignore_file" ]; then
+        echo "Notice: $ignore_file already exists. Not overwriting."
+    else
+        cat << 'EOF' > "$ignore_file"
+(?d).git
+(?d).stfolder
+(?d).stignore
+(?d)*.tmp
+(?d)*.swp
+(?d)*.sync-conflict-*
+(?d).DS_Store
+(?d)__pycache__
+EOF
+        echo "Created standard .stignore in $target_dir"
+    fi
+}
+
+cmd_add() {
+    local folder_path="${1:-}"
+    if [ -z "$folder_path" ]; then
+        echo "Usage: sync-scope add <folder-path> [scope-id] [label]" >&2
+        exit 1
+    fi
+
+    # Expand absolute path
+    folder_path=$(realpath "$folder_path")
+    if [ ! -d "$folder_path" ]; then
+        echo "Directory $folder_path does not exist. Creating it..."
+        mkdir -p "$folder_path"
+    fi
+
+    local folder_id="${2:-$(basename "$folder_path")}"
+    local label="${3:-$folder_id}"
+
+    # Ensure .stignore exists
+    cmd_ignore "$folder_path"
+
+    # Fetch all known devices to share with them by default
+    local my_id
+    my_id=$(get_my_id)
+    local dev_payload
+    dev_payload=$(api_get "/rest/config/devices" | jq --arg my_id "$my_id" '[.[] | {deviceID: .deviceID}] + [{deviceID: $my_id}] | unique_by(.deviceID)')
+
+    local folder_payload
+    folder_payload=$(jq -n \
+        --arg id "$folder_id" \
+        --arg label "$label" \
+        --arg path "$folder_path" \
+        --argjson devs "$dev_payload" \
+        '{
+            id: $id,
+            label: $label,
+            path: $path,
+            type: "sendreceive",
+            rescanIntervalS: 3600,
+            fsWatcherEnabled: true,
+            fsWatcherDelayS: 10,
+            ignorePerms: false,
+            autoNormalize: true,
+            devices: $devs
+        }')
+
+    echo "Registering scope '$folder_id' ($folder_path) in Syncthing..."
+    api_post "/rest/config/folders" "$folder_payload"
+    echo "Scope '$folder_id' successfully registered and shared with all configured peers!"
+}
+
+cmd_mesh() {
+    echo "Auditing cluster mesh: Ensuring all scopes are shared across all configured peers..."
+    local my_id
+    my_id=$(get_my_id)
+    local all_devs
+    all_devs=$(api_get "/rest/config/devices" | jq --arg my_id "$my_id" '[.[] | {deviceID: .deviceID}] + [{deviceID: $my_id}] | unique_by(.deviceID)')
+    
+    local updated_folders
+    updated_folders=$(api_get "/rest/config/folders" | jq --argjson all_devs "$all_devs" '
+        map(
+            . as $f |
+            ($all_devs) as $target_devs |
+            .devices = ($f.devices + $target_devs | unique_by(.deviceID))
+        )
+    ')
+    
+    api_put "/rest/config/folders" "$updated_folders" >/dev/null
+    echo "All scopes have been updated to sync across all configured peers!"
+}
+
+cmd_web() {
+    echo "Syncthing Web GUI is running locally on:"
+    echo "  http://127.0.0.1:8384"
+    echo ""
+    echo "To access securely from another machine (e.g. Chromebook or Workstation):"
+    echo "  ssh -L 8384:127.0.0.1:8384 kof@10.0.0.14"
+    echo "  (Then open http://localhost:8384 in your browser)"
+}
+
+case "${1:-}" in
+    status)
+        cmd_status
+        ;;
+    id)
+        cmd_id
+        ;;
+    qr)
+        cmd_qr
+        ;;
+    devices)
+        cmd_devices
+        ;;
+    list|ls)
+        cmd_list
+        ;;
+    pending)
+        cmd_pending
+        ;;
+    mesh|sync-all)
+        cmd_mesh
+        ;;
+    add)
+        shift
+        cmd_add "$@"
+        ;;
+    ignore)
+        shift
+        cmd_ignore "$@"
+        ;;
+    web)
+        cmd_web
+        ;;
+    *)
+        echo "sync-scope - Multi-Device Multi-Scope Synchronization Tool"
+        echo ""
+        echo "Usage: sync-scope <command> [args...]"
+        echo ""
+        echo "Commands:"
+        echo "  status            Show overall service, peer connections, and synced scopes"
+        echo "  id                Show this device's Syncthing ID"
+        echo "  qr                Display terminal QR code for quick mobile/chromebook pairing"
+        echo "  devices           Show list of configured peers and online/offline status"
+        echo "  list              List all configured scopes/folders with sync %"
+        echo "  pending           Check for pending incoming device or folder requests"
+        echo "  mesh              Ensure all registered scopes are shared with all known peers"
+        echo "  add <path> [id]   Register a new directory as a synced scope across all devices"
+        echo "  ignore [path]     Generate recommended .stignore in target folder"
+        echo "  web               Show Web GUI access & SSH tunnel details"
+        exit 0
+        ;;
+esac

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# mluv - zero-bloat CLI speech synthesizer for Czech neural TTS (Piper)
+# Default voice: Kasandra (neural female)
+# Alternative: Jirka (neural male, -m), Zdenek/Radek (RHVoice, -r)
+
+set -e
+
+VOICES_DIR="$HOME/.local/share/piper/voices"
+VOICE="$VOICES_DIR/cs_CZ-kasandra-medium.onnx"
+SPEED=1.0
+
+usage() {
+    echo "Použití: mluv [-m|--jirka] [-f|--kasandra] [-r|--rhvoice] [-s|--speed RATE] [\"text ke čtení\"]"
+    echo "Příklady:"
+    echo "  mluv \"Ahoj Kofe, systém běží bez závad.\""
+    echo "  echo \"Zpráva ze schránky\" | mluv"
+    echo "  mluv -m \"Hlas Jirka mluví.\""
+    exit 0
+}
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            ;;
+        -m|--jirka)
+            VOICE="$VOICES_DIR/cs_CZ-jirka-medium.onnx"
+            shift
+            ;;
+        -f|--kasandra)
+            VOICE="$VOICES_DIR/cs_CZ-kasandra-medium.onnx"
+            shift
+            ;;
+        -r|--rhvoice)
+            USE_RHVOICE=1
+            shift
+            ;;
+        -s|--speed)
+            SPEED="$2"
+            shift 2
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+
+TEXT="${POSITIONAL[*]}"
+
+# If no positional arguments, read from stdin
+if [ -z "$TEXT" ]; then
+    TEXT="$(cat)"
+fi
+
+if [ -z "$TEXT" ]; then
+    exit 0
+fi
+
+# Fonetická normalizace starořeckého jména τέχνη [tékʰnɛː] pro český hlas Kasandra:
+# V klasické attičtině je χ aspirovaná plozíva [kʰ] a η dlouhé otevřené [ɛː], nikoliv novořecké [i].
+TEXT="$(echo "$TEXT" | sed -E -e 's/τέχνη/Tékhné/g' -e 's/Techné/Téchné/g')"
+
+if [ "$USE_RHVOICE" = "1" ]; then
+    echo "$TEXT" | RHVoice-test -p Zdenek -r 1.0 -v 1.0 | pw-play -
+else
+    TMP_WAV="/tmp/mluv_$$.wav"
+    trap 'rm -f "$TMP_WAV"' EXIT INT TERM
+    echo "$TEXT" | piper --model "$VOICE" --length_scale "$SPEED" --output_file "$TMP_WAV" 2>/dev/null
+    pw-play "$TMP_WAV"
+fi

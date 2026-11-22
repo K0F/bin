@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# =============================================================================
+# fleet-src — Distributed ~/src Manager across t520, bazina, and boxC
+# =============================================================================
+# Usage:
+#   fleet-src status            Parallel status of all ~/src repos & update stavy.md
+#   fleet-src clone-missing     Populate empty/missing ~/src dirs from boxC / t520
+#   fleet-src mirror-to-boxc    Ensure bare repo exists on boxC:/home/kof/repos/
+#   fleet-src sync [repo]       Sync one or all clean repos with boxC/upstream
+# =============================================================================
+set -euo pipefail
+
+SRC_DIR="${SRC_DIR:-$HOME/src}"
+BOXC_HOST="${BOXC_HOST:-10.0.0.14}"
+T520_HOST="${T520_HOST:-10.0.0.18}"
+BAZINA_HOST="${BAZINA_HOST:-10.0.0.15}"
+HOSTNAME_SHORT="$(hostname -s)"
+
+log_now() {
+    if command -v now >/dev/null 2>&1; then
+        now "[FLEET-SRC] $*" >/dev/null 2>&1 || true
+    fi
+    if [ -d "$SRC_DIR/.agents" ]; then
+        printf "[%s] [%s] [fleet-src] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$HOSTNAME_SHORT" "$*" >> "$SRC_DIR/.agents/commands.log"
+    fi
+}
+
+cmd_status() {
+    echo "== [fleet-src] Scanning git repositories in $SRC_DIR on $HOSTNAME_SHORT =="
+    local stavy_file="$SRC_DIR/stavy.md"
+    local tmp_rows
+    tmp_rows="$(mktemp)"
+
+    check_one() {
+        local d="$1"
+        [ -d "$d/.git" ] || return 0
+        local name branch commit remote dirty state
+        name="$(basename "$d")"
+        [ "$name" = "src" ] && return 0
+        branch="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")"
+        commit="$(git -C "$d" log -1 --format='%h %s' 2>/dev/null | cut -c1-50 || echo "no commits")"
+        remote="$(git -C "$d" remote get-url origin 2>/dev/null || echo "no-remote")"
+        if [ -n "$(git -C "$d" status --porcelain 2>/dev/null)" ]; then
+            state="dirty"
+        else
+            state="clean"
+        fi
+        printf "%-30s | %-10s | %-7s | %s\n" "$name" "$branch" "$state" "$remote"
+        printf "| \`%s\` | \`%s\` | %s | \`%s\` | \`%s\` |\n" "$name" "$branch" "$commit" "$remote" "$state" >> "$2"
+    }
+    export -f check_one
+
+    find "$SRC_DIR" -mindepth 1 -maxdepth 1 -type d | sort | parallel -j 8 --keep-order check_one {} "$tmp_rows"
+
+    if [ -s "$tmp_rows" ]; then
+        {
+            echo "# Stavy repozitářů v ~/src ($HOSTNAME_SHORT)"
+            echo ""
+            echo "Generováno: $(date -Iseconds)"
+            echo ""
+            echo "| Projekt | Větev | Poslední commit | Remote URL | Stav |"
+            echo "| :--- | :--- | :--- | :--- | :--- |"
+            sort "$tmp_rows"
+        } > "$stavy_file"
+        echo "[✓] Updated $stavy_file ($(wc -l < "$tmp_rows") repositories)."
+    fi
+    rm -f "$tmp_rows"
+}
+
+cmd_clone_missing() {
+    echo "== [fleet-src] Populating empty or missing repositories in $SRC_DIR =="
+    local empty_dirs=()
+    while IFS= read -r d; do
+        local base
+        base="$(basename "$d")"
+        [[ "$base" == .* ]] && continue
+        empty_dirs+=("$base")
+    done < <(find "$SRC_DIR" -mindepth 1 -maxdepth 1 -type d -empty | sort)
+
+    if [ "${#empty_dirs[@]}" -eq 0 ]; then
+        echo "[✓] No empty stub directories found in $SRC_DIR."
+        return 0
+    fi
+
+    echo "[*] Found ${#empty_dirs[@]} empty directories. Syncing from boxC ($BOXC_HOST) / t520 ($T520_HOST)..."
+    for name in "${empty_dirs[@]}"; do
+        local target="$SRC_DIR/$name"
+        if ssh -o BatchMode=yes -o ConnectTimeout=3 "$BOXC_HOST" "[ -d /home/kof/repos/${name}.git ]" 2>/dev/null; then
+            echo "  [+] Cloning $name from boxC:repos/${name}.git ..."
+            rmdir "$target" 2>/dev/null || true
+            git clone -q "kof@${BOXC_HOST}:/home/kof/repos/${name}.git" "$target" 2>/dev/null || mkdir -p "$target"
+        elif [ "$HOSTNAME_SHORT" != "t520" ] && ssh -o BatchMode=yes -o ConnectTimeout=3 "$T520_HOST" "[ -d /home/kof/src/${name} ]" 2>/dev/null; then
+            echo "  [+] Syncing $name from t520:~/src/${name} ..."
+            rsync -az --info=none "kof@${T520_HOST}:/home/kof/src/${name}/" "$target/" || true
+        fi
+    done
+    log_now "Populated missing repositories in $SRC_DIR on $HOSTNAME_SHORT"
+    echo "[✓] Done populating repositories."
+}
+
+cmd_mirror_to_boxc() {
+    local target_repo="${1:-}"
+    echo "== [fleet-src] Mirroring repositories to boxC:/home/kof/repos/ =="
+    mirror_one() {
+        local d="$1"
+        [ -d "$d/.git" ] || return 0
+        local name
+        name="$(basename "$d")"
+        [ "$name" = "src" ] && return 0
+        # Check if repo has at least one commit
+        git -C "$d" rev-parse HEAD >/dev/null 2>&1 || return 0
+
+        echo "  [*] Mirroring $name -> boxC:/home/kof/repos/${name}.git"
+        ssh -o BatchMode=yes "$BOXC_HOST" "
+            if [ ! -d /home/kof/repos/${name}.git ]; then
+                git init --bare -q /home/kof/repos/${name}.git
+            fi
+        "
+        if ! git -C "$d" remote get-url boxc >/dev/null 2>&1; then
+            git -C "$d" remote add boxc "kof@${BOXC_HOST}:/home/kof/repos/${name}.git" 2>/dev/null || true
+        else
+            git -C "$d" remote set-url boxc "kof@${BOXC_HOST}:/home/kof/repos/${name}.git" 2>/dev/null || true
+        fi
+        if ! git -C "$d" remote get-url origin >/dev/null 2>&1; then
+            git -C "$d" remote add origin "kof@${BOXC_HOST}:/home/kof/repos/${name}.git" 2>/dev/null || true
+        fi
+        git -C "$d" push -q boxc --all 2>/dev/null || true
+        git -C "$d" push -q boxc --tags 2>/dev/null || true
+    }
+    export -f mirror_one
+    export BOXC_HOST
+
+    if [ -n "$target_repo" ]; then
+        mirror_one "$SRC_DIR/$target_repo"
+    else
+        find "$SRC_DIR" -mindepth 1 -maxdepth 1 -type d | sort | parallel -j 6 --keep-order mirror_one {}
+    fi
+    log_now "Mirrored repositories to boxC:/home/kof/repos/"
+    echo "[✓] Mirroring complete."
+}
+
+cmd_sync() {
+    local target_repo="${1:-}"
+    if [ -n "$target_repo" ]; then
+        local d="$SRC_DIR/$target_repo"
+        if [ ! -d "$d/.git" ]; then
+            echo "Error: $d is not a git repository." >&2
+            exit 1
+        fi
+        echo "== [fleet-src] Syncing $target_repo =="
+        git -C "$d" fetch --all -q || true
+        git -C "$d" pull --rebase -q 2>/dev/null || true
+        if git -C "$d" remote get-url boxc >/dev/null 2>&1; then
+            git -C "$d" push -q boxc HEAD 2>/dev/null || true
+        fi
+        git -C "$d" push -q origin HEAD 2>/dev/null || true
+        log_now "Synced repository $target_repo"
+        echo "[✓] $target_repo synced."
+    else
+        "$HOME/bin/sync-src" "$SRC_DIR"
+    fi
+}
+
+ACTION="${1:-status}"
+shift || true
+
+case "$ACTION" in
+    status)         cmd_status "$@" ;;
+    clone-missing)  cmd_clone_missing "$@" ;;
+    mirror-to-boxc) cmd_mirror_to_boxc "$@" ;;
+    sync)           cmd_sync "$@" ;;
+    *)
+        echo "Usage: fleet-src <status|clone-missing|mirror-to-boxc [repo]|sync [repo]>" >&2
+        exit 1
+        ;;
+esac

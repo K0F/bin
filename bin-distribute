@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# bin-distribute: Robust synchronization and distribution of ~/bin across the fleet (bazina, t520, boxC)
+set -euo pipefail
+
+BIN_DIR="${HOME}/bin"
+THIS_HOST="$(hostname -s)"
+
+echo "==> [${THIS_HOST}] Fleet ~/bin Distribution Starting..."
+
+cd "${BIN_DIR}"
+
+# 1. Update and commit local changes in ~/bin
+if [ -d .git ]; then
+    git add .gitignore
+    git add -u
+    # Also add untracked scripts that are not ignored
+    git add alpine-timewarp bangthis find-bazina fleet-apk fleet-deploy \
+            fleet-monitor fleet-print fleet-src gram gram-yt-music \
+            grid50_remote gxbox-cli kofsum later mluv mpdplayer \
+            omicron parallel-fleet parallel-hard postgen_sync.sh \
+            resume sync-scope sync-techne term4 tj tw vyroci bin-distribute 2>/dev/null || true
+
+    if ! git diff --cached --quiet; then
+        echo "[*] Committing local changes in ~/bin on ${THIS_HOST}..."
+        git commit -m "sync(bin/${THIS_HOST}): $(date -Iseconds)" || true
+    fi
+
+    echo "[*] Pushing ~/bin to origin..."
+    git push origin main 2>/dev/null || true
+fi
+
+# 2. Distribute to active fleet nodes via SSH & rsync parity
+for node in bazina boxC t520; do
+    if [ "$node" = "$THIS_HOST" ] || { [ "$node" = "bazina" ] && [ "$THIS_HOST" = "permafrost" ]; } || { [ "$node" = "permafrost" ] && [ "$THIS_HOST" = "bazina" ]; }; then
+        continue
+    fi
+
+    echo "==> Synchronizing ~/bin -> ${node}..."
+    if ! ssh -o ConnectTimeout=2 -o BatchMode=yes "kof@${node}" "true" 2>/dev/null; then
+        echo "[!] ${node}: unreachable, skipping."
+        continue
+    fi
+
+    # Update .gitignore on remote first
+    scp -q "${BIN_DIR}/.gitignore" "kof@${node}:~/bin/.gitignore" 2>/dev/null || true
+
+    # Pull cleanly via git if remote has git repo
+    if ssh -o ConnectTimeout=3 "kof@${node}" "[ -d ~/bin/.git ] && cd ~/bin && git pull --rebase origin main" >/dev/null 2>&1; then
+        echo "[✓] ${node}: git pull --rebase succeeded."
+    fi
+
+    # Sync scripts and symlinks (excluding .git, binary objects and archives)
+    rsync -au --copy-links --exclude='.git/' --exclude='__pycache__/' --exclude='*.tar.gz' \
+          --exclude='*.zip' --exclude='*.log' --exclude='*.o' --exclude='*.a' \
+          --exclude='arduino-cli' --exclude='fleetMonitor' --exclude='netjitter' \
+          --exclude='till' --exclude='dada' --exclude='michacka' --exclude='postgen' \
+          --exclude='genmontage' --exclude='raymontage' --exclude='gh' --exclude='rtl_wmbus' \
+          --exclude='llama-server' --exclude='llama-bench' --exclude='wa-post' \
+          "${BIN_DIR}/" "kof@${node}:~/bin/" 2>/dev/null || true
+
+    echo "[✓] ${node}: ~/bin scripts parity established."
+done
+
+echo "[✓] Fleet ~/bin distribution completed."

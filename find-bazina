@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+import socket
+import subprocess
+import sys
+import time
+
+CANDIDATE_PORTS = [22, 2222, 2223]
+SUBNET = "10.0.0"
+KNOWN_IPS = {
+    "10.0.0.1": "t520 (Wi-Fi)",
+    "10.0.0.18": "t520 (Ethernet)",
+    "10.0.0.11": "TESLA TE-300",
+    "10.0.0.14": "boxC (eth0)",
+    "10.0.0.15": "bazina",
+    "10.0.0.16": "boxC (wlan0)",
+    "10.0.0.29": "Android phone",
+    "10.0.0.138": "Router / Gateway"
+}
+
+def check_mdns():
+    try:
+        ip = socket.gethostbyname("bazina.local")
+        return ip
+    except Exception:
+        return None
+
+def scan_port(ip, port, timeout=0.2):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        if s.connect_ex((ip, port)) == 0:
+            s.send(b"\n")
+            banner = s.recv(128).decode(errors="ignore").strip()
+            s.close()
+            return True, banner
+    except Exception:
+        pass
+    finally:
+        s.close()
+    return False, None
+
+def ping_sweep():
+    procs = []
+    for i in range(1, 255):
+        ip = f"{SUBNET}.{i}"
+        p = subprocess.Popen(["ping", "-c", "1", "-W", "1", ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        procs.append((ip, p))
+    for _, p in procs:
+        p.wait()
+
+def scan_network():
+    print("[*] Checking mDNS for bazina.local...")
+    mdns_ip = check_mdns()
+    if mdns_ip:
+        print(f"[+] bazina.local resolved to {mdns_ip}!")
+        for p in CANDIDATE_PORTS:
+            ok, banner = scan_port(mdns_ip, p)
+            if ok:
+                print(f"[+] SSH open on {mdns_ip}:{p} ({banner})")
+                return mdns_ip, p
+
+    print("[*] Performing ping sweep on 10.0.0.0/24...")
+    ping_sweep()
+
+    # Get live neighbors from arp/neigh table
+    neigh = subprocess.check_output(["ip", "neigh"]).decode()
+    live_ips = []
+    for line in neigh.splitlines():
+        if "REACHABLE" in line or "DELAY" in line or "STALE" in line:
+            parts = line.split()
+            if parts:
+                ip = parts[0]
+                if ip.startswith(SUBNET) and ip not in KNOWN_IPS:
+                    live_ips.append(ip)
+
+    if not live_ips:
+        print("[-] No new unknown devices found in ARP table.")
+    else:
+        print(f"[*] Probing candidate IPs: {live_ips}")
+        for ip in live_ips:
+            for p in CANDIDATE_PORTS:
+                ok, banner = scan_port(ip, p)
+                if ok:
+                    print(f"[+] Found SSH on {ip}:{p} -> {banner}")
+                    return ip, p
+
+    return None, None
+
+def main():
+    loop = "--watch" in sys.argv or "-w" in sys.argv
+    print("=== Bazina LAN Discovery & Connection Helper ===")
+    
+    if not loop:
+        ip, port = scan_network()
+        if ip:
+            print(f"\n[SUCCESS] Bazina is reachable at {ip}:{port}!")
+            print(f"Connect with: ssh -p {port} kof@{ip}")
+        else:
+            print("\nBazina has not yet joined the network or is still booting up.")
+            print("Run with '--watch' to wait for it automatically: find-bazina --watch")
+    else:
+        print("[*] Watching network for Bazina... (Press Ctrl+C to cancel)")
+        while True:
+            ip, port = scan_network()
+            if ip:
+                print(f"\n[SUCCESS] Bazina detected at {ip}:{port}!")
+                print(f"Connect with: ssh -p {port} kof@{ip}")
+                break
+            time.sleep(3)
+
+if __name__ == "__main__":
+    main()

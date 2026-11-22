@@ -1,0 +1,3 @@
+#!/bin/bash
+curl -sSfL bitba.ng/install | sh
+bitbang serve

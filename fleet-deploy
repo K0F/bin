@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# =============================================================================
+# fleet-deploy — Unified Web & Git Hook Deployment Manager for boxC (pešek.com)
+# =============================================================================
+# Usage:
+#   fleet-deploy status                       Show web targets & hooks on boxC
+#   fleet-deploy init-hook <repo> <web_dir>   Install post-receive web hook on boxC
+#   fleet-deploy push-web <local_dir> <subd>  Rsync static site to <subd>.pešek.com
+#   fleet-deploy konzdat [issue]              Build Konzdat + XeLaTeX PDF & deploy
+# =============================================================================
+set -euo pipefail
+
+SRC_DIR="${SRC_DIR:-$HOME/src}"
+BOXC_HOST="${BOXC_HOST:-10.0.0.14}"
+T520_HOST="${T520_HOST:-10.0.0.18}"
+HOSTNAME_SHORT="$(hostname -s)"
+
+log_now() {
+    if command -v now >/dev/null 2>&1; then
+        now "[FLEET-DEPLOY] $*" >/dev/null 2>&1 || true
+    fi
+    if [ -d "$SRC_DIR/.agents" ]; then
+        printf "[%s] [%s] [fleet-deploy] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$HOSTNAME_SHORT" "$*" >> "$SRC_DIR/.agents/commands.log"
+    fi
+}
+
+cmd_status() {
+    echo "== [fleet-deploy] Web Subdomains & Git Hooks on boxC ($BOXC_HOST) =="
+    ssh "$BOXC_HOST" '
+        echo "--- Active Nginx Services ---"
+        for s in nginx php8.2-fpm gitea jellyfin; do
+            printf "  %-15s : %s\n" "$s" "$(systemctl is-active $s 2>/dev/null || echo inactive)"
+        done
+        echo "--- Web Directories in /var/www/html ---"
+        for d in /var/www/html/konzdat /var/www/html/apk /var/www/html/kryštof /var/www/html/jáchym /var/www/html/barbora /var/www/html/kamila /var/www/html/mirek /var/www/html/vincent /var/www/html/ignác /var/www/html/malvína; do
+            if [ -d "$d" ]; then
+                printf "  %-28s : %s files\n" "$d" "$(find "$d" -maxdepth 2 -type f | wc -l)"
+            fi
+        done
+        echo "--- Active post-receive Hooks in /home/kof/repos ---"
+        for h in /home/kof/repos/*.git/hooks/post-receive; do
+            [ -x "$h" ] && echo "  [✓] $h"
+        done
+    '
+}
+
+cmd_init_hook() {
+    local repo="${1:-}"
+    local web_dir="${2:-}"
+    if [ -z "$repo" ] || [ -z "$web_dir" ]; then
+        echo "Usage: fleet-deploy init-hook <repo_name> <target_web_dir_on_boxC>" >&2
+        exit 1
+    fi
+
+    echo "== [fleet-deploy] Installing post-receive hook on boxC:/home/kof/repos/${repo}.git -> ${web_dir} =="
+    ssh "$BOXC_HOST" "
+        mkdir -p /home/kof/repos/${repo}.git
+        if [ ! -f /home/kof/repos/${repo}.git/HEAD ]; then
+            git init --bare -q /home/kof/repos/${repo}.git
+        fi
+        mkdir -p '${web_dir}'
+        cat > /home/kof/repos/${repo}.git/hooks/post-receive << 'HOOKEOF'
+#!/usr/bin/env bash
+set -e
+TARGET_DIR=\"${web_dir}\"
+TMP_DIR=\$(mktemp -d)
+GIT_WORK_TREE=\"\$TMP_DIR\" git checkout -f HEAD
+mkdir -p \"\$TARGET_DIR\"
+rsync -a --delete --exclude='.git' \"\$TMP_DIR/\" \"\$TARGET_DIR/\"
+rm -rf \"\$TMP_DIR\"
+sudo chown -R kof:www-data \"\$TARGET_DIR\" 2>/dev/null || true
+sudo chmod -R 775 \"\$TARGET_DIR\" 2>/dev/null || true
+echo \"[✓] Deployed ${repo} -> \$TARGET_DIR on boxC\"
+HOOKEOF
+        chmod +x /home/kof/repos/${repo}.git/hooks/post-receive
+    "
+    log_now "Initialized post-receive hook for ${repo}.git -> ${web_dir}"
+    echo "[✓] Hook installed: pushing to boxC:repos/${repo}.git now auto-deploys to ${web_dir}."
+}
+
+cmd_push_web() {
+    local local_dir="${1:-}"
+    local subd="${2:-}"
+    if [ -z "$local_dir" ] || [ -z "$subd" ]; then
+        echo "Usage: fleet-deploy push-web <local_dir> <subdomain|path>" >&2
+        echo "Examples: fleet-deploy push-web ./dist kryštof" >&2
+        echo "          fleet-deploy push-web ./site jáchym" >&2
+        exit 1
+    fi
+    local target="/var/www/html/$subd"
+    echo "== [fleet-deploy] Deploying $local_dir -> boxC:$target (https://${subd}.pešek.com/) =="
+    ssh "$BOXC_HOST" "mkdir -p '$target'"
+    rsync -avz --exclude='.git' "$local_dir/" "kof@${BOXC_HOST}:$target/"
+    ssh "$BOXC_HOST" "sudo chown -R kof:www-data '$target' && sudo chmod -R 775 '$target'"
+    log_now "Deployed $local_dir to boxC:$target"
+    echo "[✓] Live at: https://${subd}.pešek.com/"
+}
+
+cmd_konzdat() {
+    local issue="${1:-Log_26_W45}"
+    echo "== [fleet-deploy] Building and deploying Konzdat ($issue) =="
+    cd "$SRC_DIR/konzdat"
+    ./bin/samizdat build "$issue"
+    if command -v xelatex >/dev/null 2>&1; then
+        (cd "issues/$issue" && xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1 && xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1)
+    else
+        scp -q "issues/$issue/issue.tex" "kof@${T520_HOST}:/home/kof/src/konzdat/issues/$issue/issue.tex"
+        ssh "$T520_HOST" "cd /home/kof/src/konzdat/issues/$issue && xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1 && xelatex -interaction=nonstopmode issue.tex >/dev/null 2>&1"
+        scp -q "kof@${T520_HOST}:/home/kof/src/konzdat/issues/$issue/issue.pdf" "issues/$issue/issue.pdf"
+    fi
+    git add -A
+    git commit -m "konzdat($issue): automated build & deploy via fleet-deploy" || true
+    git push origin main
+    log_now "Built and deployed Konzdat $issue"
+}
+
+ACTION="${1:-status}"
+shift || true
+
+case "$ACTION" in
+    status)    cmd_status "$@" ;;
+    init-hook) cmd_init_hook "$@" ;;
+    push-web)  cmd_push_web "$@" ;;
+    konzdat)   cmd_konzdat "$@" ;;
+    *)
+        echo "Usage: fleet-deploy <status|init-hook <repo> <web_dir>|push-web <dir> <subd>|konzdat [issue]>" >&2
+        exit 1
+        ;;
+esac

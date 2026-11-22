@@ -1,0 +1,3 @@
+#!/bin/bash
+# parallel-fleet: Generic cluster runner across all 16 cores of t520, bazina, and boxC
+exec parallel --sshloginfile ~/.parallel/sshloginfile "$@"
