@@ -9,12 +9,11 @@ if [[ ! -e "$DEV" ]]; then
     exit 1
 fi
 
-echo "[*] Otevírám $DEV (MJPEG 1280x720, low-latency)..."
-exec mpv \
+echo "[*] Otevírám $DEV v mpv (MJPEG 1080p/720p, low-latency)..."
+exec mpv "$DEV" \
     --demuxer-lavf-format=video4linux2 \
     --demuxer-lavf-o-set=input_format=mjpeg \
-    --demuxer-lavf-o-set=video_size=1280x720 \
     --profile=low-latency \
     --untimed \
     --title="Webcam: ${DEV}" \
-    "av://v4l2:${DEV}"
+    "$@"
