@@ -1,5 +1,5 @@
 #!/bin/zsh
-CONV="9860fe31-3526-48d1-9063-3e58e630faf9"
+CONV="b33c5c75-6602-4240-b7d6-3761ba2807f3"
 CURRENT_HOST="$(hostname)"
 
 if [[ "$CURRENT_HOST" == "boxC" || "$CURRENT_HOST" == "bazina" || "$CURRENT_HOST" == "B" ]] && command -v agy >/dev/null 2>&1; then

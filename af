@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SESSION_NAME="techne"
-DEFAULT_CONV="9860fe31-3526-48d1-9063-3e58e630faf9"
+DEFAULT_CONV="b33c5c75-6602-4240-b7d6-3761ba2807f3"
 CURRENT_HOST="$(hostname -s 2>/dev/null || uname -n)"
 if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; then
     CURRENT_HOST="phone"
