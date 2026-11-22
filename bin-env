@@ -44,7 +44,7 @@ esac
 unset _ARCH
 
 # X11 Display Redirection (Fleet client -> t520 central display)
-if [ "$FLEET_NODE" = "bazina" ] || [ "$FLEET_NODE" = "permafrost" ]; then
+if [ "$FLEET_NODE" = "bazina" ] || [ "$FLEET_NODE" = "permafrost" ] || [ "$FLEET_NODE" = "boxC" ] || [ "$FLEET_NODE" = "boxc" ]; then
     _X11_TARGET="t520"
     [ -f "$HOME/.config/x11-target" ] && _X11_TARGET="$(cat "$HOME/.config/x11-target" 2>/dev/null)"
     if [ "$_X11_TARGET" = "t520" ]; then
