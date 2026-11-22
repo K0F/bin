@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# synergy-fleet: Manage Synergy KVM across t520 (server), permafrost/bazina (left), and boxC (right)
+# synergy-fleet: Manage Synergy KVM across t520 (server / Left) and boxC (client / Right)
 set -euo pipefail
 
 cmd="${1:-status}"
 
 case "$cmd" in
     start)
-        echo "== Starting Synergy Server on t520 (Center) =="
+        echo "== Starting Synergy Server on t520 (Left) =="
         ssh -o ConnectTimeout=3 t520 "systemctl --user start synergy-server" 2>/dev/null || systemctl --user start synergy-server
         sleep 1
-
-        echo "== Starting Synergy Client on permafrost (Left) =="
-        ssh -o ConnectTimeout=3 bazina "systemctl --user start synergy-client" 2>/dev/null || echo "Warning: Could not start on permafrost/bazina"
 
         echo "== Starting Synergy Client on boxC (Right) =="
         ssh -o ConnectTimeout=3 boxC "systemctl --user start synergy-client" 2>/dev/null || echo "Warning: Could not start on boxC"
@@ -23,8 +20,8 @@ case "$cmd" in
     stop)
         echo "== Stopping Synergy across fleet =="
         ssh -o ConnectTimeout=3 t520 "systemctl --user stop synergy-server" 2>/dev/null || systemctl --user stop synergy-server 2>/dev/null || true
-        ssh -o ConnectTimeout=3 bazina "systemctl --user stop synergy-client" 2>/dev/null || true
         ssh -o ConnectTimeout=3 boxC "systemctl --user stop synergy-client" 2>/dev/null || true
+        ssh -o ConnectTimeout=3 bazina "systemctl --user stop synergy-client" 2>/dev/null || true
         echo "All Synergy services stopped."
         ;;
 
@@ -36,10 +33,7 @@ case "$cmd" in
 
     status)
         echo "== Fleet Synergy KVM Status =="
-        echo -n "permafrost / bazina (Client / Left): "
-        ssh -o ConnectTimeout=2 bazina "systemctl --user is-active synergy-client 2>/dev/null" || echo "unreachable"
-
-        echo -n "t520 (Server / Center):               "
+        echo -n "t520 (Server / Left):                 "
         ssh -o ConnectTimeout=2 t520 "systemctl --user is-active synergy-server 2>/dev/null" || echo "unreachable"
 
         echo -n "boxC (Client / Right):                "
@@ -53,7 +47,6 @@ case "$cmd" in
     enable)
         echo "== Enabling Synergy autostart across fleet =="
         ssh -o ConnectTimeout=3 t520 "systemctl --user enable synergy-server" 2>/dev/null || systemctl --user enable synergy-server
-        ssh bazina "systemctl --user enable synergy-client" 2>/dev/null || true
         ssh boxC "systemctl --user enable synergy-client" 2>/dev/null || true
         echo "Autostart enabled on login."
         ;;
@@ -61,8 +54,7 @@ case "$cmd" in
     disable)
         echo "== Disabling Synergy autostart across fleet =="
         ssh -o ConnectTimeout=3 t520 "systemctl --user disable synergy-server 2>/dev/null" || systemctl --user disable synergy-server 2>/dev/null || true
-        ssh bazina "systemctl --user disable synergy-client 2>/dev/null" || true
-        ssh boxC "systemctl --user disable synergy-client 2>/dev/null" || true
+        ssh boxC "systemctl --user disable synergy-client" 2>/dev/null || true
         echo "Autostart disabled."
         ;;
 
