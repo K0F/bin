@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# =============================================================================
+# update-android.sh — Fleet Parity & Update Script for Android (Termux)
+# =============================================================================
+# Synchronizuje ~/src, ~/.agents, ~/.gemini/config, oh-my-zsh a ~/bin do aktuálního stavu.
+# =============================================================================
+set -euo pipefail
+
+echo "=========================================================="
+echo "  TECHNÉ FLOTILA // ANDROID (TERMUX) UPDATE & PARITY"
+echo "=========================================================="
+
+# 1. Ověření konektivity dle doktríny (Sekce 18: debian.org fallback)
+echo "[1/6] Test konektivity dle doktríny (ping debian.org)..."
+if ping -c 1 -W 2 debian.org >/dev/null 2>&1; then
+    echo "  [✓] debian.org je dostupný."
+else
+    echo "  [!] debian.org neodpovídá — ověřte mobilní data / Wi-Fi připojení."
+fi
+
+# 2. Aktualizace ~/src
+if [ -d "$HOME/src/.git" ]; then
+    echo "[2/6] Aktualizace ~/src (git pull --rebase)..."
+    (cd "$HOME/src" && git pull --rebase origin main) || echo "  [!] Selhalo pull ~/src"
+elif [ -d "$HOME/src" ]; then
+    echo "[2/6] ~/src existuje, ale není git repozitář."
+fi
+
+# 3. Aktualizace ~/.agents
+if [ -d "$HOME/.agents/.git" ]; then
+    echo "[3/6] Aktualizace ~/.agents..."
+    (cd "$HOME/.agents" && git pull --rebase origin main) || echo "  [!] Selhalo pull ~/.agents"
+fi
+
+# 4. Synchronizace ~/.gemini/config
+echo "[4/6] Zrcadlení konfigurací Techné do ~/.gemini/config..."
+mkdir -p "$HOME/.gemini/config/skills"
+[ -f "$HOME/src/GEMINI.md" ] && cp -vf "$HOME/src/GEMINI.md" "$HOME/.gemini/config/GEMINI.md"
+[ -f "$HOME/src/AGENTS.md" ] && cp -vf "$HOME/src/AGENTS.md" "$HOME/.gemini/config/AGENTS.md"
+if [ -d "$HOME/src/.agents/skills" ]; then
+    cp -vrf "$HOME/src/.agents/skills/"* "$HOME/.gemini/config/skills/" 2>/dev/null || true
+fi
+
+# 5. Aktualizace Oh My Zsh
+if [ -d "$HOME/.oh-my-zsh/.git" ]; then
+    echo "[5/6] Aktualizace Oh My Zsh..."
+    # Přesun zsh-autosuggestions do custom pokud je v plugins
+    if [ -d "$HOME/.oh-my-zsh/plugins/zsh-autosuggestions" ] && [ ! -d "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions" ]; then
+        mkdir -p "$HOME/.oh-my-zsh/custom/plugins"
+        mv -f "$HOME/.oh-my-zsh/plugins/zsh-autosuggestions" "$HOME/.oh-my-zsh/custom/plugins/" 2>/dev/null || true
+    fi
+    (cd "$HOME/.oh-my-zsh" && git pull --rebase origin master) || echo "  [!] Selhalo pull Oh My Zsh"
+fi
+
+# 6. Aktualizace ~/bin
+if [ -d "$HOME/bin/.git" ]; then
+    echo "[6/6] Aktualizace ~/bin..."
+    (cd "$HOME/bin" && git pull --rebase origin main) || echo "  [!] Selhalo pull ~/bin"
+fi
+
+echo "----------------------------------------------------------"
+echo "  [✓] Android Termux je plně synchronizován s flotilou."
+echo "=========================================================="
