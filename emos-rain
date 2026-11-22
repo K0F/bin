@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""
+emos-rain: CLI tool to inspect, zero, or manage EMOS E6016 rainfall data.
+"""
+
+import sys
+import os
+import json
+import time
+
+STATE_FILE = "/root/rtl_sdr-weather_data_parser/rain_state.json"
+GRAPH_FILE = "/root/rtl_sdr-weather_data_parser/graph.json"
+
+
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return {
+            "current_month": time.strftime("%Y-%m"),
+            "base_raw_mm": 0.0,
+            "last_raw_mm": 0.0,
+            "rollover_offset_mm": 0.0,
+        }
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_state(state):
+    state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, STATE_FILE)
+    try:
+        os.chmod(STATE_FILE, 0o644)
+    except Exception:
+        pass
+
+
+def cmd_status():
+    state = load_state()
+    month = state.get("current_month", time.strftime("%Y-%m"))
+    base = state.get("base_raw_mm", 0.0)
+    last_raw = state.get("last_raw_mm", 0.0)
+    rollover = state.get("rollover_offset_mm", 0.0)
+    monthly_rain = max(0.0, round(last_raw + rollover - base, 1))
+
+    print(f"=== EMOS Weather Station - Rainfall Telemetry ===")
+    print(f"Active Month:             {month}")
+    print(f"Monthly Rainfall (net):   {monthly_rain:.1f} mm  (starts at 0.0 mm each month)")
+    print(f"Current Raw RF Reading:   {last_raw:.1f} mm")
+    print(f"Current Monthly Baseline: {base:.1f} mm")
+    print(f"Rollover Offset:          {rollover:.1f} mm")
+    print(f"Auto-Reset Schedule:      1st of every calendar month at 00:00:00")
+    print()
+    print(f"Note on Indoor Console Display (1740 mm):")
+    print(f"  The outdoor 433MHz sensor transmits only a 12-bit hardware tip counter (0.7 mm/tip).")
+    print(f"  The indoor station display unit accumulates independently in its internal memory.")
+    print(f"  To zero the display reading on the console: press and hold 'RAIN' (or 'CLEAR') on the console for 3 seconds.")
+
+
+def cmd_zero():
+    state = load_state()
+    last_raw = state.get("last_raw_mm", 0.0)
+    rollover = state.get("rollover_offset_mm", 0.0)
+    state["base_raw_mm"] = last_raw + rollover
+    state["zeroed_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    save_state(state)
+    print(f"[OK] Rainfall baseline zeroed to current raw counter: {state['base_raw_mm']:.1f} mm.")
+    print(f"     Current monthly rainfall is now: 0.0 mm.")
+
+
+def cmd_set_base(val_str):
+    try:
+        val = float(val_str)
+    except ValueError:
+        print(f"Error: Invalid float value: {val_str}", file=sys.stderr)
+        sys.exit(1)
+    state = load_state()
+    state["base_raw_mm"] = val
+    save_state(state)
+    print(f"[OK] Baseline set to {val:.1f} mm.")
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("status", "-s", "--status"):
+        cmd_status()
+    elif args[0] in ("zero", "reset", "0"):
+        cmd_zero()
+    elif args[0] in ("set-base", "set") and len(args) > 1:
+        cmd_set_base(args[1])
+    else:
+        print("Usage: emos-rain [status|zero|set-base <mm>]")
+
+
+if __name__ == "__main__":
+    main()
