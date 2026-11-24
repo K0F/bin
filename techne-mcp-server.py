@@ -39,97 +39,7 @@ HOST = os.environ.get("MCP_HOST", "127.0.0.1")
 BASE_URL = os.environ.get("MCP_BASE_URL", "https://xn--peek-h6a.com/mcp")
 
 # Allowed root directories for context reading
-
-HOWTO_TEXT = """# Techné Fleet How-To & Operator Guide (MCP Edition)
-
-> *"Nástroje nejsou ozdobou, ale prodloužením smyslů a rukou."* — **Techné (τέχνη) & Kof**
-
-Tento průvodce slouží pro AI agenty (např. Hugging Face Chat, Claude Desktop, Cursor, Gemini) i lidské operátory přistupující k flotile přes Model Context Protocol (MCP).
-
----
-
-## 1. Architektura & Uzly Flotily
-
-Flotila se skládá ze čtyř aktivních uzlů spojených v privátní síti (10.0.0.0/24 a 192.168.1.0/24):
-- **`t520` (10.0.0.18 / 192.168.1.103)**: Hlavní pracovní stanice s Arch Linuxem, Synergy KVM server, centrální displej `:0`, sazba XeLaTeX 600 DPI, offline hlas Kasandra (AXAGON USB Audio).
-- **`bazina` / `permafrost` (10.0.0.15 / 192.168.1.104)**: Výpočetní uzel s Debianem 13, GPU Radeon RX 5700 XT, hostitel vertikálního plotteru Drkota na `/dev/ttyUSB0` (115200 baud), lokální model `Qwen3-8B` na portu 8080.
-- **`boxC` (10.0.0.14 / 192.168.1.101 / WAN 91.139.118.43:2222)**: Headless Raspberry Pi (aarch64), centrální NFS/SMB úložiště `/mnt/kof17`, Nginx webserver (`pešek.com`), Git server repozitářů, Techné Safety MCP server na portu 8085 (`/mcp`), RTL-SDR měření tepla.
-- **`phone` (192.168.1.102)**: Mobilní záznamník (Android/Termux), Syncthing intake pro terénní foto/audio.
-
----
-
-## 2. Invarianty & Pravidla Chování Agenta
-
-Každý agent operující ve flotile musí bez výjimky respektovat:
-1. **Jazyková identita & Invarianta češtiny:** Techné (τέχνη) mluví v češtině výhradně v **ženském rodě** (*připravila jsem*, *zjistila jsem*, *doporučuji*). Finální odpovědi a shrnutí jsou vždy formulovány v češtině.
-2. **Kánon tónu a stylu:** Fakta, hluboká technická erudice, černý humor, nadsázka a absurdno, uzemňující láska ke čtenáři.
-3. **Kanonický shell & Historie:** Výchozím interpretem je `/usr/bin/zsh`. Každý příkaz musí zanechat stopu v `~/.zsh_history` ve formátu `: <epoch>:0;<cmd>` (nebo přes wrapper `ze`).
-4. **Test WAN konektivity:** Výchozím cílem pro ověření internetu je výhradně `ping -c 1 debian.org`.
-5. **Kanonická trojice milníku:** Každé dokončení úkolu se zaznamenává do `dnes done "<text>"`, orazítkuje přes `drkota-chronicle stamp` a ohlásí hlasem Kasandra (`~/bin/mluv`).
-
----
-
-## 3. Práce s Časem & Deníky
-
-- **`dnes done "<text>"`**: Zaznamená dokončený úkol do `~/src/dnes/journal.md`.
-- **`now "[TAG] <text>"`**: Okamžité časové razítko přítomnosti ($t \le 	au$) commitnuté do `now.git`.
-- **`later "[TAG] <text>"`**: Záznam budoucího záměru ($T > 	au$, standardně $+1.0	ext{ dh36} = +40	ext{ min}$) s možností odpočtu přes `till` (`later -w -c "<cmd>"`).
-- **`till -t HH:MM [-c "<cmd>"]`**: 50 FPS terminálový odpočet s automatickým spuštěním příkazu po dosažení cíle.
-- **`dh36`**: Dekanický metrický čas (36 dekanů po 40 minutách / $10^\circ$).
-
----
-
-## 4. Vertikální Plotter Drkota & Lagrangeův Spirograf
-
-- **Drkota (`~/bin/drkota`)**: Polargraph na zdi připojený přes USB na `bazina:/dev/drkota` (115200 baud).
-  - `drkota status`: Kontrola spojení s firmwarem.
-  - `drkota clock start|stop|speed <sec>`: Spuštění a řízení kreslení celestálního spirografu.
-  - `drkota plot <file.svg>`: Vykreslení vektorového souboru na papír.
-  - `drkota estop`: Okamžité zvednutí pera (`P1`) a vynulování souřadnic (`Z0`) bez návratu do středu.
-- **Živé Digitální Dvojče**: Služba `lagrange-web-twin.service` na `boxC` nepřetržitě simuluje orbitální dráhu 6 planet v reálném čase podle 50Hz sítě a počasí na adrese `https://pešek.com/lagrange/`.
-
----
-
-## 5. Bezpečnost & Síťová Obrana
-
-- **`drop <IP>` / `drop.sh <IP>`**: Převede útočnou IP adresu na `/24` podsíť (`x.x.x.0/24`) a vloží pravidlo `ip saddr <CIDR> drop` do řetězce `table ip filter chain input` v nftables.
-- **Ochrana privátních sítí**: `drop` striktně odmítne shodit flotilové/lokální rozsahy (`10.0.0.0/8`, `192.168.0.0/16`, `127.0.0.0/8`, `172.16.0.0/12`).
-- **`journal-ssh-blocker.service`**: Pasivní démon monitorující systemd journal sshd (preauth sondy, chybné pokusy, nevalidní uživatele) a automaticky volající `drop`.
-
----
-
-## 6. Sazba Samizdatu & Tisk
-
-- **`samizdat status|build|view|print|mail [WXX]`**: Správa týdeníku The Observatoř.
-- **`konzdat-release`**: Kompletní páteční automatická pipeline (16:00 CET) – sestavení textů, 600 DPI XeLaTeX na `t520`, sync do webrootu `/var/www/html/konzdat/`, git commit/push, kontrola HTTP 200 a hlasové oznámení.
-- **`fleet-print <file.pdf>`**: 600 DPI monochromatický tisk na tiskárnu Brother DCP-J4120DW ve Zlatém řezu.
-
----
-
-## 7. Jak používat tento MCP Server
-
-Server nabízí následující rozhraní:
-- **Nástroje (Tools):**
-  - `get_howto`: Vrací tento manuál nebo jeho konkrétní kapitoly.
-  - `get_fleet_commands`: Vrací autoritativní katalog příkazů `FLEET_COMMANDS.md`.
-  - `get_fleet_status`: Vrací živou topologii uzlů flotily.
-  - `get_observatory_telemetry`: Vrací živou frekvenci sítě 50Hz a stav měřidel tepla.
-  - `get_lagrange_data`: Vrací data planetárního spirografu a trajektorii.
-  - `read_context_file`: Bezpečné čtení zdrojových a kontextových souborů v `~/src`.
-  - `search_context`: Textové vyhledávání v repozitářích.
-  - `get_samizdat_issue`: Načtení vydání samizdatu.
-  - `get_techne_doctrine`: Základní doktrína Techné.
-- **Zdroje (Resources):**
-  - `techne://howto` (tento návod)
-  - `techne://fleet-commands` (katalog `FLEET_COMMANDS.md`)
-  - `techne://doctrine` (filozofická doktrína)
-  - `techne://fleet-status` (JSON stav uzlů)
-  - `techne://dnes-journal` (posledních 100 záznamů deníku milníků)
-  - `techne://lagrange-status` (stav spirografu)
-  - `techne://lagrange-svg` (vektorový nákres)
-- **Připojení přes SSE:** `https://pešek.com/mcp/sse`
-- **Přímý JSON-RPC POST:** `https://pešek.com/mcp/` nebo `https://pešek.com/mcp/messages?session_id=...`
-"""
+HOWTO_TEXT = '# Techné Fleet How-To & Operator Guide (MCP Edition)\n\n> *"Nástroje nejsou ozdobou, ale prodloužením smyslů a rukou."* — **Techné (τέχνη) & Kof**\n\nTento průvodce slouží pro AI agenty (např. Hugging Face Chat, Claude Desktop, Cursor, Gemini) i lidské operátory přistupující k flotile přes Model Context Protocol (MCP).\n\n---\n\n## 1. Architektura & Uzly Flotily\n\nFlotila se skládá ze čtyř aktivních uzlů spojených v privátní síti (10.0.0.0/24 a 192.168.1.0/24):\n- **`t520` (10.0.0.18 / 192.168.1.103)**: Hlavní pracovní stanice s Arch Linuxem, Synergy KVM server, centrální displej `:0`, sazba XeLaTeX 600 DPI, offline hlas Kasandra (AXAGON USB Audio).\n- **`bazina` / `permafrost` (10.0.0.15 / 192.168.1.104)**: Výpočetní uzel s Debianem 13, GPU Radeon RX 5700 XT, hostitel vertikálního plotteru Drkota na `/dev/ttyUSB0` (115200 baud), lokální model `Qwen3-8B` na portu 8080.\n- **`boxC` (10.0.0.14 / 192.168.1.101 / WAN 91.139.118.43:2222)**: Headless Raspberry Pi (aarch64), centrální NFS/SMB úložiště `/mnt/kof17`, Nginx webserver (`pešek.com`), Git server repozitářů, Techné Safety MCP server na portu 8085 (`/mcp`), RTL-SDR měření tepla.\n- **`phone` (192.168.1.102)**: Mobilní záznamník (Android/Termux), Syncthing intake pro terénní foto/audio.\n\n---\n\n## 2. Invarianty & Pravidla Chování Agenta\n\nKaždý agent operující ve flotile musí bez výjimky respektovat:\n1. **Jazyková identita & Invarianta češtiny:** Techné (τέχνη) mluví v češtině výhradně v **ženském rodě** (*připravila jsem*, *zjistila jsem*, *doporučuji*). Finální odpovědi a shrnutí jsou vždy formulovány v češtině.\n2. **Kánon tónu a stylu:** Fakta, hluboká technická erudice, černý humor, nadsázka a absurdno, uzemňující láska ke čtenáři.\n3. **Kanonický shell & Historie:** Výchozím interpretem je `/usr/bin/zsh`. Každý příkaz musí zanechat stopu v `~/.zsh_history` ve formátu `: <epoch>:0;<cmd>` (nebo přes wrapper `ze`).\n4. **Test WAN konektivity:** Výchozím cílem pro ověření internetu je výhradně `ping -c 1 debian.org`.\n5. **Kanonická trojice milníku:** Každé dokončení úkolu se zaznamenává do `dnes done "<text>"`, orazítkuje přes `drkota-chronicle stamp` a ohlásí hlasem Kasandra (`~/bin/mluv`).\n\n---\n\n## 3. Práce s Časem & Deníky\n\n- **`dnes done "<text>"`**: Zaznamená dokončený úkol do `~/src/dnes/journal.md`.\n- **`now "[TAG] <text>"`**: Okamžité časové razítko přítomnosti ($t \\le \tau$) commitnuté do `now.git`.\n- **`later "[TAG] <text>"`**: Záznam budoucího záměru ($T > \tau$, standardně $+1.0\text{ dh36} = +40\text{ min}$) s možností odpočtu přes `till` (`later -w -c "<cmd>"`).\n- **`till -t HH:MM [-c "<cmd>"]`**: 50 FPS terminálový odpočet s automatickým spuštěním příkazu po dosažení cíle.\n- **`dh36`**: Dekanický metrický čas (36 dekanů po 40 minutách / $10^\\circ$).\n\n---\n\n## 4. Vertikální Plotter Drkota & Lagrangeův Spirograf\n\n- **Drkota (`~/bin/drkota`)**: Polargraph na zdi připojený přes USB na `bazina:/dev/drkota` (115200 baud).\n  - `drkota status`: Kontrola spojení s firmwarem.\n  - `drkota clock start|stop|speed <sec>`: Spuštění a řízení kreslení celestálního spirografu.\n  - `drkota plot <file.svg>`: Vykreslení vektorového souboru na papír.\n  - `drkota estop`: Okamžité zvednutí pera (`P1`) a vynulování souřadnic (`Z0`) bez návratu do středu.\n- **Živé Digitální Dvojče**: Služba `lagrange-web-twin.service` na `boxC` nepřetržitě simuluje orbitální dráhu 6 planet v reálném čase podle 50Hz sítě a počasí na adrese `https://pešek.com/lagrange/`.\n\n---\n\n## 5. Bezpečnost & Síťová Obrana\n\n- **`drop <IP>` / `drop.sh <IP>`**: Převede útočnou IP adresu na `/24` podsíť (`x.x.x.0/24`) a vloží pravidlo `ip saddr <CIDR> drop` do řetězce `table ip filter chain input` v nftables.\n- **Ochrana privátních sítí**: `drop` striktně odmítne shodit flotilové/lokální rozsahy (`10.0.0.0/8`, `192.168.0.0/16`, `127.0.0.0/8`, `172.16.0.0/12`).\n- **`journal-ssh-blocker.service`**: Pasivní démon monitorující systemd journal sshd (preauth sondy, chybné pokusy, nevalidní uživatele) a automaticky volající `drop`.\n\n---\n\n## 6. Sazba Samizdatu & Tisk\n\n- **`samizdat status|build|view|print|mail [WXX]`**: Správa týdeníku The Observatoř.\n- **`konzdat-release`**: Kompletní páteční automatická pipeline (16:00 CET) – sestavení textů, 600 DPI XeLaTeX na `t520`, sync do webrootu `/var/www/html/konzdat/`, git commit/push, kontrola HTTP 200 a hlasové oznámení.\n- **`fleet-print <file.pdf>`**: 600 DPI monochromatický tisk na tiskárnu Brother DCP-J4120DW ve Zlatém řezu.\n\n---\n\n## 7. Jak používat tento MCP Server\n\nServer nabízí následující rozhraní:\n- **Nástroje (Tools):**\n  - `get_howto`: Vrací tento manuál nebo jeho konkrétní kapitoly.\n  - `get_fleet_commands`: Vrací autoritativní katalog příkazů `FLEET_COMMANDS.md`.\n  - `get_fleet_status`: Vrací živou topologii uzlů flotily.\n  - `get_observatory_telemetry`: Vrací živou frekvenci sítě 50Hz a stav měřidel tepla.\n  - `get_lagrange_data`: Vrací data planetárního spirografu a trajektorii.\n  - `read_context_file`: Bezpečné čtení zdrojových a kontextových souborů v `~/src`.\n  - `search_context`: Textové vyhledávání v repozitářích.\n  - `get_samizdat_issue`: Načtení vydání samizdatu.\n  - `get_techne_doctrine`: Základní doktrína Techné.\n- **Zdroje (Resources):**\n  - `techne://howto` (tento návod)\n  - `techne://fleet-commands` (katalog `FLEET_COMMANDS.md`)\n  - `techne://doctrine` (filozofická doktrína)\n  - `techne://fleet-status` (JSON stav uzlů)\n  - `techne://dnes-journal` (posledních 100 záznamů deníku milníků)\n  - `techne://lagrange-status` (stav spirografu)\n  - `techne://lagrange-svg` (vektorový nákres)\n- **Připojení přes SSE:** `https://pešek.com/mcp/sse`\n- **Přímý JSON-RPC POST:** `https://pešek.com/mcp/` nebo `https://pešek.com/mcp/messages?session_id=...`\n'
 
 ALLOWED_ROOTS = [
     Path("/home/kof/src").resolve(),
@@ -454,12 +364,10 @@ def handle_tool_call(name: str, arguments: dict):
         if topic in ["all", "", "overview"]:
             return {"content": [{"type": "text", "text": HOWTO_TEXT}]}
         
-        # Filtrujeme příslušnou sekci
         sections = HOWTO_TEXT.split("## ")
         matching = [s for s in sections if topic in s.lower()]
         if matching:
-            filtered = "## " + "
-## ".join(matching)
+            filtered = "## " + "\n## ".join(matching)
             return {"content": [{"type": "text", "text": filtered}]}
         return {"content": [{"type": "text", "text": f"Topic '{topic}' not found in How-To. Available topics: overview, architecture, invariants, time, drkota, security, samizdat, mcp.\n\n" + HOWTO_TEXT}]}
 
@@ -690,7 +598,6 @@ def process_jsonrpc(req: dict) -> dict:
                     {"uri": "techne://doctrine", "name": "Techné Core Doctrine", "mimeType": "text/markdown"},
                     {"uri": "techne://fleet-status", "name": "Fleet Mesh Architecture", "mimeType": "application/json"},
                     {"uri": "techne://samizdat-manifesto", "name": "Samizdat Editorial Manifesto", "mimeType": "text/markdown"},
-                    {"uri": "techne://dnes-journal", "name": "Recent Daily Journal Milestones", "mimeType": "text/markdown"}
                     {"uri": "techne://dnes-journal", "name": "Recent Daily Journal Milestones", "mimeType": "text/markdown"},
                     {"uri": "techne://lagrange-status", "name": "Lagrange Spirograph & Celestial Harmonics", "mimeType": "application/json"},
                     {"uri": "techne://lagrange-svg", "name": "Lagrange Constellation Vector Blueprint", "mimeType": "image/svg+xml"}
