@@ -23,8 +23,11 @@ find_active_server() {
     return 1
 }
 
-# Ensure DISPLAY is set for graphical/XWayland environments (e.g. Crostini or systemd user services)
-export DISPLAY="${DISPLAY:-:0}"
+# Ensure DISPLAY is always the local physical display (:0) for KVM client,
+# protecting against SSH tunnels or x11-to-t520 setting DISPLAY=:10.
+if [ -z "${DISPLAY:-}" ] || [ "$DISPLAY" = ":10" ] || [ "$DISPLAY" = "localhost:10.0" ] || [ "$DISPLAY" = "localhost:10" ]; then
+    export DISPLAY=":0"
+fi
 
 # Locate synergyc / barrierc / deskflow-client binary across standard paths
 SYNERGYC="$(command -v synergyc 2>/dev/null || command -v barrierc 2>/dev/null || command -v deskflow-client 2>/dev/null || true)"
