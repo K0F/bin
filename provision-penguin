@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# provision-penguin: Onboard or update penguin (Chromebook) once powered on and reachable
+# provision-phaser: Onboard or update phaser (Debian 13 Chromebook) once powered on and reachable
 set -euo pipefail
 
-PENGUIN_IP="${1:-192.168.1.105}"
+PHASER_IP="${1:-192.168.1.25}"
 
-echo "[provision-penguin] Checking connectivity to penguin ($PENGUIN_IP)..."
-if ! ping -c 1 -W 2 "$PENGUIN_IP" &>/dev/null; then
-    echo "[provision-penguin] Error: penguin ($PENGUIN_IP) is currently offline / unreachable."
+echo "[provision-phaser] Checking connectivity to phaser ($PHASER_IP)..."
+if ! ping -c 1 -W 2 "$PHASER_IP" &>/dev/null; then
+    echo "[provision-phaser] Error: phaser ($PHASER_IP) is currently offline / unreachable."
     exit 1
 fi
 
-echo "[provision-penguin] Updating ~/bin, identity, and SuperCollider on penguin..."
-ssh -o ConnectTimeout=5 "kof@$PENGUIN_IP" '
+echo "[provision-phaser] Updating ~/bin, identity, and SuperCollider on phaser..."
+ssh -o ConnectTimeout=5 "kof@$PHASER_IP" '
 git -C ~/bin pull origin main
 sudo bash -c "cat << CONF > /etc/fleet_id
 # Fleet Node Identification
-FLEET_NODE=\"crostini\"
+FLEET_NODE=\"phaser\"
 FLEET_ARCH=\"x86_64\"
-FLEET_SIGN=\"[crostini:x86_64]\"
+FLEET_SIGN=\"[phaser:x86_64]\"
 CONF
 chmod 644 /etc/fleet_id"
 
@@ -28,4 +28,4 @@ grep -q "bin-env" ~/.zshrc 2>/dev/null || echo "[ -f \"\$HOME/bin/bin-env\" ] &&
 ~/bin/fleet-id
 ~/bin/setup-sc-node
 '
-echo "[provision-penguin] Complete."
+echo "[provision-phaser] Complete."

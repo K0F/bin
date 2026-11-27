@@ -15,7 +15,7 @@ fi
 TARGET_NODE=""
 if [ $# -gt 0 ]; then
     case "$1" in
-        t520|bazina|boxC|penguin|android|phone)
+        t520|bazina|boxC|phaser|penguin|crostini|android|phone)
             TARGET_NODE="$1"
             shift
             ;;

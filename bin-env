@@ -1,5 +1,5 @@
 # ~/bin/bin-env — Architecture-Aware Fleet Path & Identity Setup
-# Sourced in ~/.bashrc and ~/.zshrc across t520, bazina, boxC, penguin, android
+# Sourced in ~/.bashrc and ~/.zshrc across t520, bazina, boxC, phaser, android
 
 _ARCH="$(uname -m)"
 export FLEET_ARCH="$_ARCH"
@@ -18,7 +18,7 @@ if [ -z "$FLEET_NODE" ]; then
         t520*|workstation*) export FLEET_NODE="t520" ;;
         bazina*|permafrost*)  export FLEET_NODE="permafrost" ;;
         boxC*|B)            export FLEET_NODE="boxC" ;;
-        penguin*|crostini*) export FLEET_NODE="crostini" ;;
+        phaser*|penguin*|crostini*) export FLEET_NODE="phaser" ;;
         localhost|android*) export FLEET_NODE="android" ;;
         *)                  export FLEET_NODE="$_HOST" ;;
     esac

@@ -198,17 +198,17 @@ def render_canvas(screens, ctx):
         ])
     paste_monitor(bazina_img, 60, 160, "BAZINA (LEFT-TOP) // AMD RYZEN + RX 5700 XT", "192.168.1.104 [1920x1080]")
 
-    # 2. PENGUIN (Left-Bottom)
-    penguin_img = create_placeholder_card("PENGUIN [LEFT-BOTTOM]", 1366, 768, "192.168.1.105", [
-        "Hardware: Chromebook Field Node",
-        "Identity: crostini [x86_64 Debian container]",
-        "Role: Mobile field terminal & documentation",
-        "Synergy KVM: Client connected (bottom-left)",
-        "NTP: Synchronized to t520 Stratum 1 Grandmaster",
-        "Network: 192.168.1.105 (WiFi) / 10.39.9.105 (WG)",
+    # 2. PHASER (Left-Bottom)
+    penguin_img = create_placeholder_card("PHASER [LEFT-BOTTOM]", 1366, 768, "192.168.1.25", [
+        "Hardware: Chromebook Phaser (Celeron N4020)",
+        "Identity: phaser [x86_64 Bare-Metal Debian 13]",
+        "Role: Mobile field terminal & audio DSP",
+        "Touchscreen: Synaptics SYTS7817 I2C-HID",
+        "Audio: Intel SOF da7219 PipeWire-JACK",
+        "Network: 192.168.1.25 (WiFi)",
         "Physical placement: Left of t520 under bazina"
     ])
-    paste_monitor(penguin_img, 60, 1340, "PENGUIN (LEFT-BOTTOM) // CHROMEBOOK FIELD NODE", "192.168.1.105 [1366x768]")
+    paste_monitor(penguin_img, 60, 1340, "PHASER (LEFT-BOTTOM) // DEBIAN 13 CHROMEBOOK NODE", "192.168.1.25 [1366x768]")
 
     # 3. ANDROID (Under table left)
     android_img = create_placeholder_card("ANDROID [PHONE]", 470, 768, "192.168.1.103", [
@@ -317,9 +317,9 @@ Lunární fáze: {ctx['moon_summary']}
 ║  192.168.1.104 · 1920x1080         │ 192.168.1.100 · 1600x900                │ 192.168.1.101 · 1024x768║
 ║  Debian 13 · Ryzen · RX 5700 XT    │ Arch Linux · ThinkPad · Intel HD 3000   │ Pi 4 · PiJockey HDMI   ║
 ║────────────────────────────────────┴─────────────────────────────────────────┴────────────────────────║
-║  [LEVÝ DOLNÍ] PENGUIN              │ [POD STOLEM VLEVO] ANDROID                                       ║
-║  192.168.1.105 · 1366x768          │ 192.168.1.103:8022 · Termux aarch64                              ║
-║  Crostini Chromebook x86_64        │ Senzorická telemetrie OSC                                        ║
+║  [LEVÝ DOLNÍ] PHASER               │ [POD STOLEM VLEVO] ANDROID                                       ║
+║  192.168.1.25 · 1366x768           │ 192.168.1.100:8022 · Termux aarch64                              ║
+║  Debian 13 Trixie Chromebook x86_64│ Senzorická telemetrie OSC                                        ║
 ╚═══════════════════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
@@ -327,7 +327,7 @@ Lunární fáze: {ctx['moon_summary']}
 - **t520 (Server):** 1600x900, Arch Linux, PTP Grandmaster (±6 ns), SDR 868.95 MHz radiátory
 - **bazina:** 1920x1080, Debian 13 Trixie, NBD 8GB swap server, Brother DCP-J4120DW CUPS
 - **boxC:** 1024x768, Raspberry Pi 4, WireGuard VPN (10.39.9.1), OpenVPN (10.39.10.1), NFS /mnt/kof17
-- **penguin:** 1366x768, Chromebook crostini mobilní terénní stanice
+- **phaser:** 1366x768, Chromebook Debian 13 Trixie bare-metal stanice (192.168.1.25)
 - **android:** 192.168.1.103:8022, Xiaomi Termux aarch64
 
 ## Poslední zaznamenané milníky z repozitáře dnes:

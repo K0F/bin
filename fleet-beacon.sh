@@ -15,7 +15,7 @@ TARGETS=(
     "255.255.255.255"
     "192.168.1.255"
     "192.168.1.100"
-    "192.168.1.102"
+    "192.168.1.25"
     "192.168.1.104"
     "192.168.1.101"
     "192.168.1.105"
@@ -41,8 +41,8 @@ RAW_HOST="$(hostname -s 2>/dev/null || uname -n)"
 if [ -z "$FLEET_NODE" ]; then
     if [ -d "/data/data/com.termux" ] || [ -n "$TERMUX_VERSION" ] || [ "$RAW_HOST" = "localhost" ] || [ "$RAW_HOST" = "android" ]; then
         FLEET_NODE="android"
-    elif [ "$RAW_HOST" = "penguin" ]; then
-        FLEET_NODE="crostini"
+    elif [ "$RAW_HOST" = "phaser" ] || [ "$RAW_HOST" = "penguin" ] || [ "$RAW_HOST" = "crostini" ]; then
+        FLEET_NODE="phaser"
     else
         FLEET_NODE="$RAW_HOST"
     fi
@@ -148,9 +148,9 @@ while true; do
     if [ "$FLEET_NODE" = "boxC" ] && [ "$disk_mount" = "/mnt/kof17" ]; then
         awk_crit=$(awk -v df="$disk_free" 'BEGIN { print (df < 3.0) ? 1 : 0 }')
         [ "$awk_crit" -eq 1 ] && alert="kof17 CRITICAL: ${disk_free}G free"
-    elif [ "$FLEET_NODE" = "crostini" ]; then
+    elif [ "$FLEET_NODE" = "phaser" ]; then
         awk_crit=$(awk -v df="$disk_free" 'BEGIN { print (df < 1.0) ? 1 : 0 }')
-        [ "$awk_crit" -eq 1 ] && alert="crostini LOW DISK: ${disk_free}G free"
+        [ "$awk_crit" -eq 1 ] && alert="phaser LOW DISK: ${disk_free}G free"
     fi
     if [ "$bat_pct" -ge 0 ] && [ "$bat_pct" -le 15 ]; then
         alert="$FLEET_NODE BATTERY CRITICAL: ${bat_pct}%"

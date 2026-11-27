@@ -32,12 +32,12 @@
 static const char *TARGETS[] = {
     "255.255.255.255",
     "192.168.1.255",
-    "192.168.1.100",  /* t520 ETH */
-    "192.168.1.102",  /* t520 WiFi */
+    "192.168.1.103",  /* t520 ETH */
+    "192.168.1.105",  /* t520 WiFi */
     "192.168.1.104",  /* bazina */
     "192.168.1.101",  /* boxC */
-    "192.168.1.105",  /* crostini */
-    "192.168.1.103",  /* android */
+    "192.168.1.25",   /* phaser */
+    "192.168.1.100",  /* android */
     "10.39.9.255",    /* WireGuard Broadcast */
     "10.39.9.1",      /* boxC VPN */
     "10.0.0.255",
@@ -113,8 +113,8 @@ static void resolve_identity(char *node, size_t n_len, char *arch, size_t a_len,
                 snprintf(node, n_len, "android");
             } else if (strcmp(hbuf, "localhost") == 0 || strcmp(hbuf, "android") == 0) {
                 snprintf(node, n_len, "android");
-            } else if (strcmp(hbuf, "penguin") == 0) {
-                snprintf(node, n_len, "crostini");
+            } else if (strcmp(hbuf, "phaser") == 0 || strcmp(hbuf, "penguin") == 0 || strcmp(hbuf, "crostini") == 0) {
+                snprintf(node, n_len, "phaser");
             } else {
                 snprintf(node, n_len, "%s", hbuf);
             }
@@ -412,11 +412,9 @@ static void update_shm(const char *node, const char *payload) {
         int wrote_any = 0;
 
         /* Scan and copy other nodes if still fresh (< 30s) */
-        const char *known[] = { "t520", "bazina", "boxC", "crostini", "penguin", "android", "phone", NULL };
+        const char *known[] = { "t520", "bazina", "boxC", "phaser", "android", "phone", NULL };
         for (int k = 0; known[k] != NULL; ++k) {
             if (strcmp(known[k], node) == 0) continue;
-            if ((strcmp(node, "crostini") == 0 && strcmp(known[k], "penguin") == 0) ||
-                (strcmp(node, "penguin") == 0 && strcmp(known[k], "crostini") == 0)) continue;
             if ((strcmp(node, "android") == 0 && strcmp(known[k], "phone") == 0) ||
                 (strcmp(node, "phone") == 0 && strcmp(known[k], "android") == 0)) continue;
 
@@ -502,9 +500,9 @@ static void drain_udp_and_wan(int udp_sock, const char *local_node) {
                         }
                         if (wnode[0] != '\0' && strcmp(wnode, local_node) != 0) {
                             update_shm(wnode, wbuf);
-                            /* Rebroadcast NAT/WAN nodes (penguin/crostini/android) to LAN */
-                            if (udp_sock >= 0 && (strcmp(wnode, "penguin") == 0 || strcmp(wnode, "crostini") == 0 || strcmp(wnode, "android") == 0 || strcmp(wnode, "phone") == 0)) {
-                                const char *lan_targets[] = { "192.168.1.255", "192.168.1.100", "192.168.1.104", "192.168.1.103", NULL };
+                            /* Rebroadcast NAT/WAN nodes (phaser/android) to LAN */
+                            if (udp_sock >= 0 && (strcmp(wnode, "phaser") == 0 || strcmp(wnode, "android") == 0 || strcmp(wnode, "phone") == 0)) {
+                                const char *lan_targets[] = { "192.168.1.255", "192.168.1.103", "192.168.1.105", "192.168.1.104", "192.168.1.25", "192.168.1.100", NULL };
                                 for (int t = 0; lan_targets[t] != NULL; ++t) {
                                     struct sockaddr_in sin;
                                     memset(&sin, 0, sizeof(sin));
@@ -565,7 +563,7 @@ static void send_wan_http(const char *local_node, const char *payload) {
                     body += 4;
                     char *first_brace = strchr(body, '{');
                     if (first_brace) {
-                        const char *known[] = { "t520", "bazina", "boxC", "crostini", "penguin", "android", "phone", NULL };
+                        const char *known[] = { "t520", "bazina", "boxC", "phaser", "android", "phone", NULL };
                         double now_ts = (double)time(NULL);
                         for (int k = 0; known[k] != NULL; ++k) {
                             if (strcmp(known[k], local_node) == 0) continue;
@@ -665,8 +663,8 @@ int main(int argc, char **argv) {
         char alert[256] = "";
         if (strcmp(node, "boxC") == 0 && strcmp(mount, "/mnt/kof17") == 0 && disk_free < 3.0) {
             snprintf(alert, sizeof(alert), "kof17 CRITICAL: %.1fG free", disk_free);
-        } else if ((strcmp(node, "crostini") == 0 || strcmp(node, "penguin") == 0) && disk_free < 1.0) {
-            snprintf(alert, sizeof(alert), "crostini LOW DISK: %.1fG free", disk_free);
+        } else if (strcmp(node, "phaser") == 0 && disk_free < 1.0) {
+            snprintf(alert, sizeof(alert), "phaser LOW DISK: %.1fG free", disk_free);
         } else if (bat_pct >= 0 && bat_pct <= 15) {
             snprintf(alert, sizeof(alert), "%s BATTERY CRITICAL: %d%%", node, bat_pct);
         }

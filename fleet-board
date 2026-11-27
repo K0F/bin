@@ -28,6 +28,12 @@ NODE_ALIASES = {
     "t520": "t520",
     "boxc": "boxC",
     "boxC": "boxC",
+    "android": "android",
+    "phone": "android",
+    "termux": "android",
+    "phaser": "phaser",
+    "crostini": "phaser",
+    "penguin": "phaser",
 }
 
 
@@ -388,7 +394,7 @@ MCP_TOOLS = [
     },
     {
         "name": "board_post",
-        "description": "Odešle zprávu na společnou nástěnku flotily viditelnou pro všechny uzly (t520, bazina, boxC).",
+        "description": "Odešle zprávu na společnou nástěnku flotily viditelnou pro všechny uzly (t520, bazina, boxC, android).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -400,12 +406,12 @@ MCP_TOOLS = [
     },
     {
         "name": "board_add_task",
-        "description": "Přidá nový úkol na společný board a přiřadí ho konkrétnímu uzlu (t520, bazina, boxC) nebo libovolnému (any).",
+        "description": "Přidá nový úkol na společný board a přiřadí ho konkrétnímu uzlu (t520, bazina, boxC, android) nebo libovolnému (any).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Krátký popis úkolu."},
-                "target_node": {"type": "string", "enum": ["t520", "bazina", "boxC", "any"], "description": "Cílový uzel flotily."},
+                "target_node": {"type": "string", "enum": ["t520", "bazina", "boxC", "android", "phaser", "any"], "description": "Cílový uzel flotily."},
                 "payload": {"type": "string", "description": "Volitelný detail, příkaz nebo kontext úkolu."}
             },
             "required": ["title"],
@@ -595,7 +601,7 @@ def main():
 
     s_add = sub.add_parser("add", help="Přidat úkol")
     s_add.add_argument("title")
-    s_add.add_argument("--to", default="any", help="t520 | bazina | boxC | any")
+    s_add.add_argument("--to", default="any", help="t520 | bazina | boxC | android | any")
     s_add.add_argument("--payload", default="")
 
     s_claim = sub.add_parser("claim", help="Vyzvednout další úkol pro uzel")

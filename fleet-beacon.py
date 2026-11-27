@@ -20,12 +20,12 @@ PORT = 9850
 TARGETS = [
     "<broadcast>",
     "192.168.1.255",
-    "192.168.1.100",  # t520 (Ethernet)
-    "192.168.1.102",  # t520 (WiFi)
+    "192.168.1.103",  # t520 (Ethernet)
+    "192.168.1.105",  # t520 (WiFi)
     "192.168.1.104",  # bazina (Debian 13)
     "192.168.1.101",  # boxC (RPi storage)
-    "192.168.1.105",  # penguin (Chromebook)
-    "192.168.1.103",  # phone (Android)
+    "192.168.1.25",   # phaser (Chromebook Debian 13)
+    "192.168.1.100",  # phone (Android)
     "10.39.9.255",    # WireGuard VPN Broadcast
     "10.39.9.1",      # boxC VPN
     "10.0.0.255",
@@ -148,9 +148,8 @@ def main():
         alert = ""
         if hostname == "boxC" and mount == "/mnt/kof17" and disk_free < 3.0:
             alert = f"kof17 CRITICAL: {disk_free}G free"
-        elif hostname in ("penguin", "crostini") and disk_free < 1.0:
-            alert = f"crostini LOW DISK: {disk_free}G free"
-            alert = f"penguin LOW DISK: {disk_free}G free"
+        elif hostname in ("phaser", "penguin", "crostini") and disk_free < 1.0:
+            alert = f"phaser LOW DISK: {disk_free}G free"
         elif bat_pct >= 0 and bat_pct <= 15:
             alert = f"{hostname} BATTERY CRITICAL: {bat_pct}%"
 

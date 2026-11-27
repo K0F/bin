@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sync-techne: Centrální synchronizace konfigurací Techné (.agents, skills, AGENTS.md)
-# napříč flotilou (t520 10.0.0.18, bazina 10.0.0.15, boxC 10.0.0.14) přes boxC:repos/agents.git
+# napříč flotilou (t520, bazina, boxC, phaser) přes boxC:repos/agents.git
 set -euo pipefail
 
 CENTRAL_REPO="kof@boxC:/home/kof/repos/agents.git"
@@ -54,7 +54,7 @@ git -C "${LOCAL_AGENTS_REPO}" push -u origin main >/dev/null 2>&1 || true
 #    vznikla odchlýplá AGENTS.md na boxC. Cíle proto bereme z ~/.ssh/config (aliasy)
 #    a sami sebe přeskakujeme přes hostname.
 THIS_HOST="$(hostname -s)"
-for node in bazina boxC t520; do
+for node in bazina boxC t520 phaser; do
     if [ "$node" = "$THIS_HOST" ] || { [ "$node" = "bazina" ] && [ "$THIS_HOST" = "permafrost" ]; } || { [ "$node" = "permafrost" ] && [ "$THIS_HOST" = "bazina" ]; }; then
         continue
     fi

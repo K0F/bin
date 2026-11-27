@@ -25,8 +25,8 @@ echo "$TS [$CATEGORY] $ARGS" >> /home/kof/src/now/log
 echo "$TS"
 
 # Git operations
-cd /home/kof/src/now
+cd /home/kof/src/now || exit 1
 git commit -am "$TS [$CATEGORY] $ARGS"
-git pull
-git push
+git pull --rebase --autostash
+git push || { git pull --rebase --autostash && git push; }
 

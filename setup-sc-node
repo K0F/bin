@@ -3,7 +3,7 @@
 # ~/bin/setup-sc-node — Fleet-Wide SuperCollider & Audio Provisioner
 # Ensures sclang, scsynth, sc3-plugins, DWGReverb, XYScope, NetProxy, scvim,
 # and PipeWire-JACK / ALSA-JACK routing work identically across all fleet nodes
-# (t520, bazina, boxC, crostini/penguin).
+# (t520, bazina, boxC, phaser).
 # =============================================================================
 set -euo pipefail
 
@@ -61,6 +61,7 @@ if [ ! -f "$HOME/.config/SuperCollider/startup.scd" ] || [ ! -d "$HOME/src/sc/ut
         tar -xzf "$TMP_TAR" -C "$HOME"
         rm -f "$TMP_TAR"
     elif ssh -o BatchMode=yes -o ConnectTimeout=3 boxC "true" 2>/dev/null; then
+        mkdir -p "$HOME/.config/SuperCollider" "$HOME/.local/share/SuperCollider" "$HOME/.vim/pack/my/start/scvim" "$HOME/src/sc"
         rsync -a boxC:/home/kof/.config/SuperCollider/ "$HOME/.config/SuperCollider/"
         rsync -a boxC:/home/kof/.local/share/SuperCollider/ "$HOME/.local/share/SuperCollider/"
         rsync -a boxC:/home/kof/.vim/pack/my/start/scvim/ "$HOME/.vim/pack/my/start/scvim/"
