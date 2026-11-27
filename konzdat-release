@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # konzdat-release — Kompletní autonomní release pipeline Konzdatu
 set -euo pipefail
+export PATH="$HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 ISSUE="${1:-W$(date +%V)}"
 NODE=$(hostname -s)
