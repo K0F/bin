@@ -74,12 +74,13 @@ def load_board(path):
                 if isinstance(data, dict):
                     data.setdefault("tasks", [])
                     data.setdefault("posts", [])
+                    data.setdefault("lessons", [])
                     data.setdefault("next_id", 1)
                     data.setdefault("nodes", {})
                     return data
         except Exception:
             pass
-    return {"next_id": 1, "nodes": {}, "tasks": [], "posts": []}
+    return {"next_id": 1, "nodes": {}, "tasks": [], "posts": [], "lessons": []}
 
 
 def save_board(path, data):
@@ -142,7 +143,57 @@ def op_status(limit_posts=10):
         "nodes": data["nodes"],
         "tasks": data["tasks"],
         "posts": data["posts"][-limit_posts:],
+        "lessons": data["lessons"][-5:],
     }
+
+
+def op_learn(topic, lesson, tags=""):
+    path = resolve_board_path()
+    node = get_node()
+    with board_lock(path):
+        data = load_board(path)
+        touch_node(data, node)
+        lid = len(data["lessons"]) + 1
+        entry = {
+            "id": lid,
+            "ts": now_iso(),
+            "node": node,
+            "topic": topic,
+            "lesson": lesson,
+            "tags": tags,
+        }
+        data["lessons"].append(entry)
+        data["lessons"] = data["lessons"][-200:]
+        data["posts"].append({
+            "ts": entry["ts"],
+            "node": node,
+            "author": f"agent@{node}",
+            "message": f"[LEARN #{lid}] {topic}: {lesson}",
+        })
+        data["posts"] = data["posts"][-100:]
+        save_board(path, data)
+    # Zrcadlit do /mnt/data/src/fleet_knowledge.md pro všechny uzly i lokální Qwen
+    kb_path = os.path.join(os.path.dirname(path), "src", "fleet_knowledge.md")
+    try:
+        os.makedirs(os.path.dirname(kb_path), exist_ok=True)
+        with open(kb_path, "a", encoding="utf-8") as kf:
+            tag_str = f" `{tags}`" if tags else ""
+            kf.write(f"- **[{entry['ts']}] ({node}) {topic}**{tag_str}: {lesson}\n")
+    except Exception:
+        pass
+    broadcast_event("learn", f"{topic}: {lesson}")
+    return entry
+
+
+def op_lessons(limit=20, query=""):
+    path = resolve_board_path()
+    with board_lock(path):
+        data = load_board(path)
+    items = data.get("lessons", [])
+    if query:
+        q = query.lower()
+        items = [x for x in items if q in x.get("topic", "").lower() or q in x.get("lesson", "").lower() or q in x.get("tags", "").lower()]
+    return items[-limit:]
 
 
 def op_post(message, author=None):
@@ -246,6 +297,82 @@ def op_clear_done():
     return {"removed": removed, "remaining": len(data["tasks"])}
 
 
+# ---------- Semafor / zámky nad /mnt/data/src/.locks ----------
+
+LOCKS_DIR = os.environ.get("FLEET_LOCKS_DIR", "/mnt/data/src/.locks")
+
+
+def _safe_res_name(resource):
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in resource).strip("_") or "default"
+
+
+def op_locks():
+    if not os.path.isdir(LOCKS_DIR):
+        return []
+    now_ts = time.time()
+    out = []
+    for fn in sorted(os.listdir(LOCKS_DIR)):
+        if not fn.endswith(".lock"):
+            continue
+        lp = os.path.join(LOCKS_DIR, fn)
+        try:
+            info = json.load(open(lp, "r", encoding="utf-8"))
+            info["expired"] = now_ts > float(info.get("expires_at", 0))
+            out.append(info)
+        except Exception:
+            out.append({"resource": fn[:-5], "error": "unreadable"})
+    return out
+
+
+def op_lock(resource, ttl=300):
+    os.makedirs(LOCKS_DIR, exist_ok=True)
+    res_name = _safe_res_name(resource)
+    lp = os.path.join(LOCKS_DIR, f"{res_name}.lock")
+    node = get_node()
+    now_ts = time.time()
+    payload = {
+        "resource": res_name,
+        "owner": node,
+        "pid": os.getpid(),
+        "acquired_at": now_iso(),
+        "expires_at": now_ts + int(ttl),
+    }
+    for _ in range(2):
+        try:
+            fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            broadcast_event("lock", f"LOCK {res_name} by @{node} ({ttl}s)")
+            return {"acquired": True, **payload}
+        except FileExistsError:
+            try:
+                cur = json.load(open(lp, "r", encoding="utf-8"))
+                if now_ts > float(cur.get("expires_at", 0)) or cur.get("owner") == node:
+                    os.unlink(lp)
+                    continue
+                return {"acquired": False, "held_by": cur}
+            except Exception:
+                return {"acquired": False, "error": "lock_exists"}
+    return {"acquired": False}
+
+
+def op_unlock(resource, force=False):
+    res_name = _safe_res_name(resource)
+    lp = os.path.join(LOCKS_DIR, f"{res_name}.lock")
+    if not os.path.exists(lp):
+        return {"unlocked": True, "resource": res_name, "note": "not_locked"}
+    node = get_node()
+    try:
+        cur = json.load(open(lp, "r", encoding="utf-8"))
+        if not force and cur.get("owner") != node and time.time() <= float(cur.get("expires_at", 0)):
+            return {"unlocked": False, "held_by": cur}
+    except Exception:
+        pass
+    os.unlink(lp)
+    broadcast_event("unlock", f"UNLOCK {res_name} by @{node}")
+    return {"unlocked": True, "resource": res_name}
+
+
 # ---------- MCP Stdio Server (JSON-RPC 2.0) ----------
 
 MCP_TOOLS = [
@@ -307,6 +434,53 @@ MCP_TOOLS = [
             "required": ["task_id"],
         },
     },
+    {
+        "name": "board_learn",
+        "description": "Naučí celou flotilu nový poznatek (uloží do boardu, zrcadlí do /mnt/data/src/fleet_knowledge.md a vyšle UDP beacon).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Krátké téma / projekt."},
+                "lesson": {"type": "string", "description": "Konkrétní zjištění, oprava nebo pravidlo."},
+                "tags": {"type": "string", "description": "Volitelné tagy oddělené čárkou."}
+            },
+            "required": ["topic", "lesson"],
+        },
+    },
+    {
+        "name": "board_lessons",
+        "description": "Vrátí sdílené poznatky ze všech uzlů flotily (volitelně filtrované dotazem).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max počet záznamů (výchozí 20)."},
+                "query": {"type": "string", "description": "Volitelný textový filtr."}
+            },
+        },
+    },
+    {
+        "name": "board_lock",
+        "description": "Atomicky zamkne sdílený projekt/soubor v /mnt/data/src/.locks (semafor pro bezpečnou souběžnou práci uzlů).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "resource": {"type": "string", "description": "Název zdroje, např. konzdat, processing.h, 2026."},
+                "ttl": {"type": "integer", "description": "Platnost zámku v sekundách (výchozí 300)."}
+            },
+            "required": ["resource"],
+        },
+    },
+    {
+        "name": "board_unlock",
+        "description": "Uvolní zámek v /mnt/data/src/.locks.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "resource": {"type": "string", "description": "Název zdroje."}
+            },
+            "required": ["resource"],
+        },
+    },
 ]
 
 
@@ -359,6 +533,14 @@ def run_mcp():
                     res = op_claim_task(node=args.get("node")) or {"message": "Žádný čekající úkol pro tento uzel."}
                 elif name == "board_complete_task":
                     res = op_complete_task(args["task_id"], result=args.get("result", ""), status=args.get("status", "done")) or {"error": "Úkol nenalezen."}
+                elif name == "board_learn":
+                    res = op_learn(args["topic"], args["lesson"], tags=args.get("tags", ""))
+                elif name == "board_lessons":
+                    res = op_lessons(limit=int(args.get("limit", 20)), query=args.get("query", ""))
+                elif name == "board_lock":
+                    res = op_lock(args["resource"], ttl=int(args.get("ttl", 300)))
+                elif name == "board_unlock":
+                    res = op_unlock(args["resource"])
                 else:
                     mcp_reply(req_id, error={"code": -32601, "message": f"Unknown tool: {name}"})
                     continue
@@ -379,11 +561,20 @@ def format_human_status(st):
     lines.append("Nodes:")
     for n, info in sorted(st["nodes"].items()):
         lines.append(f"  - {n:8s} {info.get('state','?')} (last_seen {info.get('last_seen','?')})")
+    locks = op_locks()
+    if locks:
+        lines.append(f"Locks ({len(locks)}):")
+        for lk in locks:
+            lines.append(f"  - {lk.get('resource')} held by @{lk.get('owner')} (expired={lk.get('expired')})")
     lines.append(f"Tasks ({len(st['tasks'])}):")
     for t in st["tasks"]:
         own = f" [{t['owner']}]" if t.get("owner") else ""
         res = f" -> {t['result']}" if t.get("result") else ""
         lines.append(f"  #{t['id']} [{t['status']}] -> @{t['target_node']}{own}: {t['title']}{res}")
+    if st.get("lessons"):
+        lines.append(f"Recent Lessons ({len(st['lessons'])}):")
+        for ls in st["lessons"]:
+            lines.append(f"  * [{ls['node']}] {ls['topic']}: {ls['lesson']}")
     lines.append(f"Recent Posts ({len(st['posts'])}):")
     for p in st["posts"]:
         lines.append(f"  [{p['ts']}] {p['author']}: {p['message']}")
@@ -420,6 +611,23 @@ def main():
 
     sub.add_parser("clear-done", help="Smazat hotové/neúspěšné úkoly")
 
+    s_learn = sub.add_parser("learn", help="Sdílet nový poznatek s celou flotilou")
+    s_learn.add_argument("topic")
+    s_learn.add_argument("lesson")
+    s_learn.add_argument("--tags", default="")
+
+    s_lessons = sub.add_parser("lessons", help="Vypsat poznatky flotily")
+    s_lessons.add_argument("query", nargs="?", default="")
+
+    s_lock = sub.add_parser("lock", help="Zamknout zdroj v /mnt/data/src/.locks")
+    s_lock.add_argument("resource")
+    s_lock.add_argument("--ttl", type=int, default=300)
+
+    s_unlock = sub.add_parser("unlock", help="Odemknout zdroj")
+    s_unlock.add_argument("resource")
+
+    sub.add_parser("locks", help="Vypsat aktivní zámky")
+
     args = p.parse_args()
     if args.mcp:
         run_mcp()
@@ -446,6 +654,23 @@ def main():
         print(json.dumps(res, indent=2, ensure_ascii=False))
     elif cmd == "clear-done":
         res = op_clear_done()
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "learn":
+        res = op_learn(args.topic, args.lesson, tags=args.tags)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "lessons":
+        res = op_lessons(query=args.query)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "lock":
+        res = op_lock(args.resource, ttl=args.ttl)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        if not res.get("acquired"):
+            sys.exit(1)
+    elif cmd == "unlock":
+        res = op_unlock(args.resource)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "locks":
+        res = op_locks()
         print(json.dumps(res, indent=2, ensure_ascii=False))
 
 
