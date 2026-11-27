@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+fleet-board — Společný board a fronta úkolů pro Antigravity & agenty flotily (t520, bazina/permafrost, boxC).
+Recykluje sdílené úložiště (/mnt/data/.fleet_board.json), UDP beacon (port 9850) a ~/bin/fleet-context.
+Podporuje jak CLI rozhraní, tak nativní MCP stdio server (--mcp) bez externích závislostí.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
+
+BOARD_PATH = os.environ.get("FLEET_BOARD_PATH", "/mnt/data/.fleet_board.json")
+FALLBACK_PATH = os.path.expanduser("~/.local/share/fleet_board.json")
+LOCK_SUFFIX = ".lock"
+BEACON_PORT = 9850
+BEACON_TARGETS = ["<broadcast>", "10.0.0.255", "192.168.1.255", "10.39.9.255", "127.0.0.1"]
+
+NODE_ALIASES = {
+    "permafrost": "bazina",
+    "bazina": "bazina",
+    "t520": "t520",
+    "boxc": "boxC",
+    "boxC": "boxC",
+}
+
+
+def get_node():
+    h = socket.gethostname().split(".")[0]
+    return NODE_ALIASES.get(h, NODE_ALIASES.get(h.lower(), h))
+
+
+def norm_node(name):
+    if not name:
+        return "any"
+    return NODE_ALIASES.get(name, NODE_ALIASES.get(name.lower(), name))
+
+
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def resolve_board_path():
+    parent = os.path.dirname(BOARD_PATH)
+    if os.path.isdir(parent) and os.access(parent, os.W_OK):
+        return BOARD_PATH
+    os.makedirs(os.path.dirname(FALLBACK_PATH), exist_ok=True)
+    return FALLBACK_PATH
+
+
+@contextmanager
+def board_lock(path):
+    lock_path = path + LOCK_SUFFIX
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def load_board(path):
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    data.setdefault("tasks", [])
+                    data.setdefault("posts", [])
+                    data.setdefault("next_id", 1)
+                    data.setdefault("nodes", {})
+                    return data
+        except Exception:
+            pass
+    return {"next_id": 1, "nodes": {}, "tasks": [], "posts": []}
+
+
+def save_board(path, data):
+    tmp = f"{path}.tmp.{socket.gethostname()}.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    try:
+        os.chmod(tmp, 0o666)
+    except Exception:
+        pass
+    os.replace(tmp, path)
+
+
+def broadcast_event(event_type, summary):
+    pkt = json.dumps({
+        "type": "fleet_board",
+        "event": event_type,
+        "node": get_node(),
+        "ts": int(time.time()),
+        "summary": summary[:200],
+    }, ensure_ascii=False).encode("utf-8")
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for t in BEACON_TARGETS:
+            try:
+                s.sendto(pkt, (t, BEACON_PORT))
+            except Exception:
+                pass
+        s.close()
+    except Exception:
+        pass
+
+    fc = os.path.expanduser("~/bin/fleet-context")
+    if os.path.exists(fc):
+        try:
+            subprocess.Popen(
+                [fc, "set", "board_last_event", f"[{get_node()}] {summary[:140]}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+
+def touch_node(data, node=None, state="online"):
+    n = norm_node(node or get_node())
+    data["nodes"][n] = {"last_seen": now_iso(), "epoch": int(time.time()), "state": state}
+
+
+def op_status(limit_posts=10):
+    path = resolve_board_path()
+    with board_lock(path):
+        data = load_board(path)
+        touch_node(data)
+        save_board(path, data)
+    return {
+        "board_path": path,
+        "self_node": get_node(),
+        "nodes": data["nodes"],
+        "tasks": data["tasks"],
+        "posts": data["posts"][-limit_posts:],
+    }
+
+
+def op_post(message, author=None):
+    path = resolve_board_path()
+    node = get_node()
+    with board_lock(path):
+        data = load_board(path)
+        touch_node(data, node)
+        entry = {
+            "ts": now_iso(),
+            "node": node,
+            "author": author or f"agent@{node}",
+            "message": message,
+        }
+        data["posts"].append(entry)
+        data["posts"] = data["posts"][-100:]
+        save_board(path, data)
+    broadcast_event("post", f"{entry['author']}: {message}")
+    return entry
+
+
+def op_add_task(title, target_node="any", payload="", created_by=None):
+    path = resolve_board_path()
+    node = get_node()
+    tgt = norm_node(target_node)
+    with board_lock(path):
+        data = load_board(path)
+        touch_node(data, node)
+        tid = data["next_id"]
+        data["next_id"] = tid + 1
+        task = {
+            "id": tid,
+            "title": title,
+            "target_node": tgt,
+            "status": "todo",
+            "owner": None,
+            "payload": payload,
+            "result": "",
+            "created_by": created_by or f"agent@{node}",
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        }
+        data["tasks"].append(task)
+        save_board(path, data)
+    broadcast_event("task_add", f"#{tid} -> @{tgt}: {title}")
+    return task
+
+
+def op_claim_task(node=None, owner=None):
+    path = resolve_board_path()
+    n = norm_node(node or get_node())
+    with board_lock(path):
+        data = load_board(path)
+        touch_node(data, n)
+        claimed = None
+        # Nejprve úkoly cílené přímo na tento uzel, pak "any"
+        for wanted in (n, "any"):
+            for t in data["tasks"]:
+                if t["status"] == "todo" and t["target_node"] == wanted:
+                    t["status"] = "in_progress"
+                    t["owner"] = owner or f"agent@{n}"
+                    t["updated_at"] = now_iso()
+                    claimed = t
+                    break
+            if claimed:
+                break
+        save_board(path, data)
+    if claimed:
+        broadcast_event("task_claim", f"#{claimed['id']} claimed by @{n}")
+    return claimed
+
+
+def op_complete_task(task_id, result="", status="done"):
+    path = resolve_board_path()
+    n = get_node()
+    with board_lock(path):
+        data = load_board(path)
+        touch_node(data, n)
+        target = None
+        for t in data["tasks"]:
+            if int(t["id"]) == int(task_id):
+                t["status"] = status
+                t["result"] = result
+                t["updated_at"] = now_iso()
+                target = t
+                break
+        save_board(path, data)
+    if target:
+        broadcast_event(f"task_{status}", f"#{task_id} {status} by @{n}: {result}")
+    return target
+
+
+def op_clear_done():
+    path = resolve_board_path()
+    with board_lock(path):
+        data = load_board(path)
+        before = len(data["tasks"])
+        data["tasks"] = [t for t in data["tasks"] if t["status"] in ("todo", "in_progress")]
+        removed = before - len(data["tasks"])
+        save_board(path, data)
+    return {"removed": removed, "remaining": len(data["tasks"])}
+
+
+# ---------- MCP Stdio Server (JSON-RPC 2.0) ----------
+
+MCP_TOOLS = [
+    {
+        "name": "board_status",
+        "description": "Vrátí aktuální stav společného boardu flotily (aktivní uzly t520/bazina/boxC, frontu úkolů a poslední zprávy na nástěnce).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit_posts": {"type": "integer", "description": "Kolik posledních zpráv z nástěnky vrátit (výchozí 10)."}
+            },
+        },
+    },
+    {
+        "name": "board_post",
+        "description": "Odešle zprávu na společnou nástěnku flotily viditelnou pro všechny uzly (t520, bazina, boxC).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Text zprávy (lze použít @t520, @bazina, @boxC, @all)."},
+                "author": {"type": "string", "description": "Volitelný podpis autora."}
+            },
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "board_add_task",
+        "description": "Přidá nový úkol na společný board a přiřadí ho konkrétnímu uzlu (t520, bazina, boxC) nebo libovolnému (any).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Krátký popis úkolu."},
+                "target_node": {"type": "string", "enum": ["t520", "bazina", "boxC", "any"], "description": "Cílový uzel flotily."},
+                "payload": {"type": "string", "description": "Volitelný detail, příkaz nebo kontext úkolu."}
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "board_claim_task",
+        "description": "Atomicky vyzvedne nejstarší čekající (todo) úkol pro aktuální uzel (nebo zadaný uzel) a označí ho jako in_progress.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "node": {"type": "string", "description": "Volitelný název uzlu (výchozí: aktuální host)."}
+            },
+        },
+    },
+    {
+        "name": "board_complete_task",
+        "description": "Označí úkol na boardu jako dokončený (done) nebo neúspěšný (failed) a uloží jeho výsledek.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "ID úkolu."},
+                "result": {"type": "string", "description": "Shrnutí výsledku nebo výstup."},
+                "status": {"type": "string", "enum": ["done", "failed"], "description": "Výsledný stav (výchozí done)."}
+            },
+            "required": ["task_id"],
+        },
+    },
+]
+
+
+def mcp_reply(req_id, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": req_id}
+    if error is not None:
+        msg["error"] = error
+    else:
+        msg["result"] = result
+    sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def run_mcp():
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            req = json.loads(raw)
+        except Exception:
+            continue
+        req_id = req.get("id")
+        method = req.get("method", "")
+        params = req.get("params") or {}
+
+        if method == "initialize":
+            mcp_reply(req_id, {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fleet-board", "version": "1.0.0"},
+            })
+        elif method == "notifications/initialized":
+            continue
+        elif method == "ping":
+            mcp_reply(req_id, {})
+        elif method == "tools/list":
+            mcp_reply(req_id, {"tools": MCP_TOOLS})
+        elif method == "tools/call":
+            name = params.get("name")
+            args = params.get("arguments") or {}
+            try:
+                if name == "board_status":
+                    res = op_status(limit_posts=int(args.get("limit_posts", 10)))
+                elif name == "board_post":
+                    res = op_post(args["message"], author=args.get("author"))
+                elif name == "board_add_task":
+                    res = op_add_task(args["title"], target_node=args.get("target_node", "any"), payload=args.get("payload", ""))
+                elif name == "board_claim_task":
+                    res = op_claim_task(node=args.get("node")) or {"message": "Žádný čekající úkol pro tento uzel."}
+                elif name == "board_complete_task":
+                    res = op_complete_task(args["task_id"], result=args.get("result", ""), status=args.get("status", "done")) or {"error": "Úkol nenalezen."}
+                else:
+                    mcp_reply(req_id, error={"code": -32601, "message": f"Unknown tool: {name}"})
+                    continue
+                mcp_reply(req_id, {
+                    "content": [{"type": "text", "text": json.dumps(res, indent=2, ensure_ascii=False)}]
+                })
+            except Exception as e:
+                mcp_reply(req_id, {
+                    "isError": True,
+                    "content": [{"type": "text", "text": f"Chyba fleet-board: {e}"}],
+                })
+        elif req_id is not None:
+            mcp_reply(req_id, error={"code": -32601, "message": f"Method not found: {method}"})
+
+
+def format_human_status(st):
+    lines = [f"=== FLEET BOARD ({st['board_path']}) | self={st['self_node']} ==="]
+    lines.append("Nodes:")
+    for n, info in sorted(st["nodes"].items()):
+        lines.append(f"  - {n:8s} {info.get('state','?')} (last_seen {info.get('last_seen','?')})")
+    lines.append(f"Tasks ({len(st['tasks'])}):")
+    for t in st["tasks"]:
+        own = f" [{t['owner']}]" if t.get("owner") else ""
+        res = f" -> {t['result']}" if t.get("result") else ""
+        lines.append(f"  #{t['id']} [{t['status']}] -> @{t['target_node']}{own}: {t['title']}{res}")
+    lines.append(f"Recent Posts ({len(st['posts'])}):")
+    for p in st["posts"]:
+        lines.append(f"  [{p['ts']}] {p['author']}: {p['message']}")
+    return "\n".join(lines)
+
+
+def main():
+    p = argparse.ArgumentParser(description="Společný board a fronta úkolů flotily")
+    p.add_argument("--mcp", action="store_true", help="Spustit jako MCP stdio server")
+    p.add_argument("--json", action="store_true", help="Výstup v JSON")
+    sub = p.add_subparsers(dest="cmd")
+
+    s_st = sub.add_parser("status", help="Stav boardu")
+    s_st.add_argument("-n", "--limit", type=int, default=10)
+
+    s_post = sub.add_parser("post", help="Zpráva na nástěnku")
+    s_post.add_argument("message")
+
+    s_add = sub.add_parser("add", help="Přidat úkol")
+    s_add.add_argument("title")
+    s_add.add_argument("--to", default="any", help="t520 | bazina | boxC | any")
+    s_add.add_argument("--payload", default="")
+
+    s_claim = sub.add_parser("claim", help="Vyzvednout další úkol pro uzel")
+    s_claim.add_argument("node", nargs="?", default=None)
+
+    s_done = sub.add_parser("done", help="Dokončit úkol")
+    s_done.add_argument("id", type=int)
+    s_done.add_argument("result", nargs="?", default="OK")
+
+    s_fail = sub.add_parser("fail", help="Označit úkol jako neúspěšný")
+    s_fail.add_argument("id", type=int)
+    s_fail.add_argument("result", nargs="?", default="FAILED")
+
+    sub.add_parser("clear-done", help="Smazat hotové/neúspěšné úkoly")
+
+    args = p.parse_args()
+    if args.mcp:
+        run_mcp()
+        return
+
+    cmd = args.cmd or "status"
+    if cmd == "status":
+        res = op_status(limit_posts=getattr(args, "limit", 10))
+        print(json.dumps(res, indent=2, ensure_ascii=False) if args.json else format_human_status(res))
+    elif cmd == "post":
+        res = op_post(args.message)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "add":
+        res = op_add_task(args.title, target_node=args.to, payload=args.payload)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "claim":
+        res = op_claim_task(node=args.node)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "done":
+        res = op_complete_task(args.id, result=args.result, status="done")
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "fail":
+        res = op_complete_task(args.id, result=args.result, status="failed")
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+    elif cmd == "clear-done":
+        res = op_clear_done()
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
