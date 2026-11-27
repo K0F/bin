@@ -33,6 +33,8 @@ rsync -au "${LOCAL_AGENTS_REPO}/skills/" "${GEMINI_CFG}/skills/"
 [ -f "${HOME}/src/AGENTS.md" ] && cp -uf "${HOME}/src/AGENTS.md" "${LOCAL_AGENTS_REPO}/AGENTS.md"
 [ -f "${GEMINI_CFG}/GEMINI.md" ] && cp -uf "${GEMINI_CFG}/GEMINI.md" "${LOCAL_AGENTS_REPO}/GEMINI.md"
 [ -f "${LOCAL_AGENTS_REPO}/GEMINI.md" ] && cp -uf "${LOCAL_AGENTS_REPO}/GEMINI.md" "${GEMINI_CFG}/GEMINI.md"
+[ -f "${GEMINI_CFG}/master_context.md" ] && cp -uf "${GEMINI_CFG}/master_context.md" "${LOCAL_AGENTS_REPO}/master_context.md"
+[ -f "${LOCAL_AGENTS_REPO}/master_context.md" ] && cp -uf "${LOCAL_AGENTS_REPO}/master_context.md" "${GEMINI_CFG}/master_context.md"
 # 2026-11-11: bylo `cp -f` (bezpodmínečně) — kombinace s `-u` o řádek výš znamenala,
 # že když měl ~/.agents/AGENTS.md MLADŠÍ mtime ale STARŠÍ obsah, přepsal se jím
 # novější ~/.gemini/config/AGENTS.md. Novější vyhrává i tady.
@@ -72,6 +74,8 @@ for node in bazina boxC t520 phaser; do
             [ -f "${HOME}/src/AGENTS.md" ] && rsync -az "${HOME}/src/AGENTS.md" "kof@${node}:~/.gemini/config/AGENTS.md" 2>/dev/null || true
             [ -f "${GEMINI_CFG}/GEMINI.md" ] && rsync -az "${GEMINI_CFG}/GEMINI.md" "kof@${node}:~/.gemini/config/GEMINI.md" 2>/dev/null || true
             [ -f "${GEMINI_CFG}/GEMINI.md" ] && rsync -az "${GEMINI_CFG}/GEMINI.md" "kof@${node}:~/.agents/GEMINI.md" 2>/dev/null || true
+            [ -f "${GEMINI_CFG}/master_context.md" ] && rsync -az "${GEMINI_CFG}/master_context.md" "kof@${node}:~/.gemini/config/master_context.md" 2>/dev/null || true
+            [ -f "${GEMINI_CFG}/master_context.md" ] && rsync -az "${GEMINI_CFG}/master_context.md" "kof@${node}:~/.agents/master_context.md" 2>/dev/null || true
             echo "[✓] Techné synchronizována -> ${node}"
         fi
     else
