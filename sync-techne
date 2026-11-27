@@ -2,6 +2,7 @@
 # sync-techne: Centrální synchronizace konfigurací Techné (.agents, skills, AGENTS.md)
 # napříč flotilou (t520, bazina, boxC, phaser) přes boxC:repos/agents.git
 set -euo pipefail
+exec 9>"/tmp/sync-techne-$(id -u).lock"; flock -w 30 9 || exit 0
 
 CENTRAL_REPO="kof@boxC:/home/kof/repos/agents.git"
 LOCAL_AGENTS_REPO="${HOME}/.agents"
