@@ -144,7 +144,7 @@ cmd_status() {
     root_disk="$(lsblk -no PKNAME "$root_dev" 2>/dev/null | head -n1 || true)"
     lsblk -nrpo NAME,SIZE,LABEL,FSTYPE,MOUNTPOINT,PKNAME 2>/dev/null | awk -F'[ ]' -v rd="$root_dev" -v rdisk="$root_disk" '
         $1 == rd { next }
-        rdisk != "" && ($1 == ("/dev/" rdisk) || $6 == rdisk) { next }
+        rdisk != "" && ($1 == ("/dev/" rdisk) || $6 == rdisk || $6 == ("/dev/" rdisk)) { next }
         $1 ~ /boot0$|boot1$|zram/ { next }
         { printf "  %-14s %-6s label=%-10s fs=%-8s mnt=%s\n", $1, $2, ($3==""?"-":$3), ($4==""?"-":$4), ($5==""?"-":$5); found=1 }
         END { if (!found) print "  (žádná externí SD karta / USB disk)" }
