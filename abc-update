@@ -142,7 +142,7 @@ cmd_status() {
     echo "--- Vyměnitelná média / SD čtečka ---"
     root_dev="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
     root_disk="$(lsblk -no PKNAME "$root_dev" 2>/dev/null | head -n1 || true)"
-    lsblk -nrpo NAME,SIZE,LABEL,FSTYPE,MOUNTPOINT,PKNAME 2>/dev/null | awk -F' ' -v rd="$root_dev" -v rdisk="$root_disk" '
+    lsblk -nrpo NAME,SIZE,LABEL,FSTYPE,MOUNTPOINT,PKNAME 2>/dev/null | awk -F'[ ]' -v rd="$root_dev" -v rdisk="$root_disk" '
         $1 == rd { next }
         rdisk != "" && ($1 == ("/dev/" rdisk) || $6 == rdisk) { next }
         $1 ~ /boot0$|boot1$|zram/ { next }
