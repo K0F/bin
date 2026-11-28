@@ -127,6 +127,13 @@ cmd_status() {
         else
             echo "Tunel 2224: neaktivní"
         fi
+    elif ssh -o BatchMode=yes -o ConnectTimeout=2 -p 2222 kof@192.168.1.101 "hostname" >/dev/null 2>&1; then
+        echo "pesek.com:  nedostupný z domácí LAN (bez hairpin NAT; boxC:2222 v LAN OK)"
+        if ssh -o BatchMode=yes -o ConnectTimeout=2 -p 2222 kof@192.168.1.101 "ss -tln 2>/dev/null | grep -q ':2224 '" 2>/dev/null; then
+            echo "Tunel 2224: AKTIVNÍ na boxC"
+        else
+            echo "Tunel 2224: neaktivní"
+        fi
     else
         echo "pesek.com:  nedostupný"
     fi
@@ -135,10 +142,10 @@ cmd_status() {
     echo "--- Vyměnitelná média / SD čtečka ---"
     root_dev="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
     root_disk="$(lsblk -no PKNAME "$root_dev" 2>/dev/null | head -n1 || true)"
-    lsblk -nrpo NAME,SIZE,LABEL,FSTYPE,MOUNTPOINT,PKNAME 2>/dev/null | awk -v rd="$root_dev" -v rdisk="$root_disk" '
+    lsblk -nrpo NAME,SIZE,LABEL,FSTYPE,MOUNTPOINT,PKNAME 2>/dev/null | awk -F' ' -v rd="$root_dev" -v rdisk="$root_disk" '
         $1 == rd { next }
-        rdisk != "" && $6 == rdisk { next }
-        $1 ~ /boot0$|boot1$/ { next }
+        rdisk != "" && ($1 == ("/dev/" rdisk) || $6 == rdisk) { next }
+        $1 ~ /boot0$|boot1$|zram/ { next }
         { printf "  %-14s %-6s label=%-10s fs=%-8s mnt=%s\n", $1, $2, ($3==""?"-":$3), ($4==""?"-":$4), ($5==""?"-":$5); found=1 }
         END { if (!found) print "  (žádná externí SD karta / USB disk)" }
     '
